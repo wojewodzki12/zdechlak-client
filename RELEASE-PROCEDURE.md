@@ -59,3 +59,22 @@ From a seeded A install, run launcher or Python `Store.install` against the live
 - AppData settings / bot profiles are outside `runtime/releases/` and are never updated.
 - Manifest lifetime max 31 days; re-sign before expiry if no content change.
 - Launcher binary itself is not auto-updated; ship a new ZIP when the launcher/trust anchor changes.
+
+## Launcher runtime (MinGW)
+
+Cross-build with `-static` so the launcher does **not** depend on `libwinpthread-1.dll`,
+`libgcc_s_seh-1.dll`, or `libstdc++-6.dll`. Verify before shipping:
+
+```bash
+x86_64-w64-mingw32-objdump -p build/cross/launcher-rebuild/ZDECHLAK.exe | awk '/DLL Name/{print $3}'
+# Must list only OS DLLs (KERNEL32, msvcrt, WINHTTP, bcrypt, SHELL32, USER32).
+```
+
+## OTC MSVC CRT
+
+Ship these x64 DLLs next to `ZDECHLAK-client.exe` (from official `vc_redist.x64.exe`):
+
+- `msvcp140.dll`
+- `vcruntime140.dll`
+- `vcruntime140_1.dll`
+

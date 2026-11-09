@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "endpoint": "https://raw.githubusercontent.com/wojewodzki12/zdechlak-client/updates/v1",
+  "channel": "prototype",
+  "key_purpose": "release"
+}

@@ -1,0 +1,7 @@
+-- FURIA OTCv8 - vBot 4.8
+-- External updater completely disabled
+
+local version = "4.8"
+
+UI.Label("vBot v" .. version .. " - FURIA")
+UI.Separator()

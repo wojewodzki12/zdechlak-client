@@ -1,0 +1,20 @@
+{
+  "kind": "zdechlak-otcv8-release",
+  "version": "1.0.4",
+  "sequence": 4,
+  "platform": "windows-x64",
+  "protocol": 860,
+  "host": "146.59.52.154",
+  "login_port": 7171,
+  "game_port": 7172,
+  "engine": "OTCv8-recovered-FURIA",
+  "bots": [
+    "CaveBot",
+    "TargetBot",
+    "vBot_4.8"
+  ],
+  "licensed_things_included": true,
+  "key_purpose": "release",
+  "update_marker": "ZDECHLAK-UPDATE-1.0.4",
+  "channel_note": "isolated-test-only"
+}

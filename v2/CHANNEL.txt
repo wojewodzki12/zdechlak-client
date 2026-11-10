@@ -1,0 +1,2 @@
+ZDECHLAK stable update channel v2
+Current: 1.0.4

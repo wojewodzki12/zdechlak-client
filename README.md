@@ -1,15 +1,11 @@
 # ZDECHLAK Client
 
-## Download (current)
+## Stable download
+https://github.com/wojewodzki12/zdechlak-client/releases/tag/v1.0.3
 
-**https://github.com/wojewodzki12/zdechlak-client/releases/tag/v1.0.3**
+Stable update channel: `https://raw.githubusercontent.com/wojewodzki12/zdechlak-client/updates/v2`
 
-Extract and run `ZDECHLAK Launcher.exe` → login `146.59.52.154:7171`.
+## Isolated Windows updater test (1.0.3 → 1.0.4)
+https://github.com/wojewodzki12/zdechlak-client/releases/tag/v1.0.4-test
 
-## Update channels
-- **Stable (1.0.3+):** `https://raw.githubusercontent.com/wojewodzki12/zdechlak-client/updates/v2`
-- **Test:** `https://raw.githubusercontent.com/wojewodzki12/zdechlak-client/updates/v1-test`
-- Legacy v1 path still exists (CDN may lag); new builds use **v2**.
-
-## Previous
-[v1.0.2](https://github.com/wojewodzki12/zdechlak-client/releases/tag/v1.0.2) — kept for reference; replace with 1.0.3 for launcher self-update.
+Test channel only: `…/updates/v1-test-104` (does **not** affect stable).

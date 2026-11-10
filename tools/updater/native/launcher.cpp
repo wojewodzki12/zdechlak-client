@@ -30,6 +30,9 @@ using J = nlohmann::json;
 using Bytes = std::vector<unsigned char>;
 constexpr size_t MAX_MANIFEST = 2 * 1024 * 1024, MAX_FILE = 128 * 1024 * 1024;
 constexpr uint64_t MAX_TOTAL = 1024ull * 1024 * 1024;
+#ifndef ZDECHLAK_LAUNCHER_VERSION
+#define ZDECHLAK_LAUNCHER_VERSION "1.0.3"
+#endif
 static std::function<void(const std::string&)> progress = [](const std::string& s){ std::cout << s << std::endl; };
 static std::string expected_channel = "prototype";
 static void need(bool ok, const std::string& error) { if (!ok) throw std::runtime_error(error); }
@@ -428,7 +431,7 @@ static void relaunch_main(const fs::path& bundle, bool check_only) {
 }
 
 static int run(std::vector<std::string> args, fs::path module_path) {
-    bool offline=false,check=false,rollback=false,apply_launcher=false;
+    bool offline=false,check=false,rollback=false,apply_launcher=false,show_version=false;
     fs::path bundle_override;
     for(size_t i=1;i<args.size();++i) {
         auto a=args[i];
@@ -436,12 +439,17 @@ static int run(std::vector<std::string> args, fs::path module_path) {
         else if(a=="--check-only")check=true;
         else if(a=="--rollback")rollback=true;
         else if(a=="--apply-launcher-update")apply_launcher=true;
+        else if(a=="--version")show_version=true;
         else if(a=="--cli"){}
         else if(a=="--bundle" && i+1<args.size())bundle_override=fs::u8path(args[++i]);
 #ifdef ZDECHLAK_NATIVE_TEST
         else if(a=="--test-objects" && i+1<args.size())test_objects=fs::u8path(args[++i]);
 #endif
         else throw std::runtime_error("Unknown or incomplete argument: "+a);
+    }
+    if (show_version) {
+        std::cout << "ZDECHLAK Launcher " << ZDECHLAK_LAUNCHER_VERSION << std::endl;
+        return 0;
     }
     fs::path bundle = bundle_override.empty() ? locate_bundle(module_path) : fs::absolute(bundle_override);
     no_links(bundle);
@@ -526,8 +534,10 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         for(int i=0;i<count;++i){args.push_back(utf8(argv[i]));if(args.back()=="--cli")cli=true;}LocalFree(argv);
         wchar_t module[32768];DWORD n=GetModuleFileNameW(nullptr,module,32768);need(n && n<32768,"Cannot locate launcher");fs::path module_path(std::wstring(module,n));
         if(!cli){WNDCLASSW c{};c.lpfnWndProc=window_proc;c.hInstance=instance;c.lpszClassName=L"ZDECHLAKLauncher";c.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);c.hIcon=LoadIconW(instance,MAKEINTRESOURCEW(1));RegisterClassW(&c);
-            window=CreateWindowW(c.lpszClassName,L"ZDECHLAK OTC",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,CW_USEDEFAULT,CW_USEDEFAULT,580,220,nullptr,nullptr,instance,nullptr);need(window!=nullptr,"Cannot create launcher window");
-            CreateWindowW(L"STATIC",L"ZDECHLAK  /  Tibia 8.60",WS_VISIBLE|WS_CHILD,24,22,530,32,window,nullptr,instance,nullptr);
+            std::wstring title = L"ZDECHLAK OTC " + wide(ZDECHLAK_LAUNCHER_VERSION);
+            window=CreateWindowW(c.lpszClassName,title.c_str(),WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,CW_USEDEFAULT,CW_USEDEFAULT,580,220,nullptr,nullptr,instance,nullptr);need(window!=nullptr,"Cannot create launcher window");
+            std::wstring subtitle = L"ZDECHLAK  /  Tibia 8.60  /  launcher " + wide(ZDECHLAK_LAUNCHER_VERSION);
+            CreateWindowW(L"STATIC",subtitle.c_str(),WS_VISIBLE|WS_CHILD,24,22,530,32,window,nullptr,instance,nullptr);
             status_label=CreateWindowW(L"STATIC",L"Weryfikacja plikow...",WS_VISIBLE|WS_CHILD,24,78,530,80,window,nullptr,instance,nullptr);ShowWindow(window,SW_SHOW);UpdateWindow(window);
             progress=[](const std::string& text){SetWindowTextW(status_label,wide(text).c_str());UpdateWindow(window);MSG m;while(PeekMessageW(&m,nullptr,0,0,PM_REMOVE)){TranslateMessage(&m);DispatchMessageW(&m);}
                 if(text.rfind("Uruchamianie ZDECHLAK OTC",0)==0)ShowWindow(window,SW_HIDE);};}

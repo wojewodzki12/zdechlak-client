@@ -1,2 +1,3 @@
-ZDECHLAK stable update channel v2
-Current: 1.0.4
+ZDECHLAK OTC stable update channel (v2)
+Current: 1.0.5 (sequence 6 client / 3 launcher)
+User data: %APPDATA%\ZDECHLAKTEST\

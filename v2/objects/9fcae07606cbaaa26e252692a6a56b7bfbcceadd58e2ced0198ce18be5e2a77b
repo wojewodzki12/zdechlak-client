@@ -1,0 +1,33 @@
+{
+  "kind": "zdechlak-otcv8-release",
+  "version": "1.0.16",
+  "sequence": 17,
+  "platform": "windows-x64",
+  "protocol": 860,
+  "host": "146.59.52.154",
+  "login_port": 7171,
+  "game_port": 7172,
+  "engine": "OTCv8-recovered-FURIA",
+  "bots": [
+    "CaveBot",
+    "TargetBot",
+    "vBot_4.8"
+  ],
+  "licensed_things_included": true,
+  "key_purpose": "release",
+  "update_marker": "ZDECHLAK-STABLE-1.0.16-SHOP-OPTION-UI-MSG",
+  "channel_note": "Stable 1.0.16 option select multiline + purchase success message",
+  "userdata_appdata": "ZDECHLAKTEST",
+  "login_background": "data/images/background.png",
+  "login_background_style": "cover-centered-no-stretch",
+  "purpose": "stable-shop-option-multiline-purchase-message",
+  "hotfix_for": "1.0.15",
+  "preserves": "1.0.7-initlua,1.0.8-redirect,1.0.9-points,1.0.10-postjson,1.0.12-updater,1.0.13-balance,1.0.14-banner",
+  "built_at": 1794436816,
+  "buy_points_url": "https://zdechlak.pl/points",
+  "launcher_version": "1.0.10-inclient",
+  "in_client_updater": true,
+  "stable": true,
+  "published": true,
+  "gui_verified": false
+}

@@ -1,0 +1,32 @@
+-- ZDECHLAK OTC 1.0. Independently written bootstrap for MIT OTClient.
+-- Security updates run inside ZDECHLAK.exe before any Lua module is loaded.
+ZDECHLAK = { name = 'ZDECHLAK', version = '1.0.0', host = '146.59.52.154',
+             port = 7171, protocol = 860, profile = 'ZDECHLAK-OTC-1.0' }
+
+if not g_resources.addSearchPath(g_resources.getWorkDir() .. 'data', true) then
+  g_logger.fatal('Brak katalogu data ZDECHLAK.')
+end
+if not g_resources.addSearchPath(g_resources.getWorkDir() .. 'modules', true) then
+  g_logger.fatal('Brak katalogu modules ZDECHLAK.')
+end
+if not g_resources.setupUserWriteDir(ZDECHLAK.profile) then
+  g_logger.fatal('Nie mozna utworzyc katalogu ustawien ZDECHLAK.')
+end
+g_logger.setLogFile(g_resources.getWriteDir() .. '/ZDECHLAK.log')
+g_configs.loadSettings('/config.otml')
+g_modules.discoverModules()
+g_modules.autoLoadModules(99)
+g_modules.ensureModuleLoaded('corelib')
+g_modules.ensureModuleLoaded('gamelib')
+g_settings.set('host', ZDECHLAK.host)
+g_settings.set('port', ZDECHLAK.port)
+g_settings.set('client-version', ZDECHLAK.protocol)
+g_settings.set('autologin', false)
+g_settings.set('locale', 'en')
+g_modules.autoLoadModules(499)
+g_modules.ensureModuleLoaded('client')
+g_modules.autoLoadModules(999)
+g_modules.ensureModuleLoaded('game_interface')
+EnterGame.setUniqueServer(ZDECHLAK.host, ZDECHLAK.port, ZDECHLAK.protocol)
+EnterGame.setServerInfo('ZDECHLAK OTC 1.0 | Tibia 8.60')
+g_window.setTitle('ZDECHLAK OTC 1.0')

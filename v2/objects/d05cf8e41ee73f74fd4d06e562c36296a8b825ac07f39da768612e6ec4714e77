@@ -1,0 +1,9 @@
+Module
+  name: game_zdechlak_shop
+  description: ZDECHLAK live website shop (MyAAC catalog)
+  author: ZDECHLAK
+  website: https://zdechlak.pl
+  sandboxed: true
+  scripts: [ game_zdechlak_shop ]
+  @onLoad: init()
+  @onUnload: terminate()

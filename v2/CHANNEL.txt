@@ -1,3 +1,4 @@
 ZDECHLAK OTC stable update channel (v2)
-Current: 1.0.5 (sequence 6 client / 3 launcher)
+Current: 1.0.6 (sequence 7 client / 4 launcher)
 User data: %APPDATA%\ZDECHLAKTEST\
+Live website shop API + integrated updater window.

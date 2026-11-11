@@ -1,0 +1,29 @@
+Panel
+  id: background
+  image-source: /images/background
+  image-smooth: true
+  anchors.top: topMenu.bottom
+  anchors.left: parent.left
+  anchors.right: parent.right
+  anchors.bottom: parent.bottom
+  margin-top: 1
+  focusable: false
+
+  UILabel
+    text: ZDECHLAK
+    font: verdana-11px-monochrome
+    color: #e8bb65
+    text-auto-resize: true
+    anchors.horizontalCenter: parent.horizontalCenter
+    anchors.top: parent.top
+    margin-top: 34
+
+  UILabel
+    id: clientVersionLabel
+    background-color: #131923cc
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    text-auto-resize: true
+    padding: 8
+    color: #e8bb65
+    font: verdana-11px-monochrome

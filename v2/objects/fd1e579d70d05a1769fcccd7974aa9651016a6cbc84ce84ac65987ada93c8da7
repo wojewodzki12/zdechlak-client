@@ -1,0 +1,28 @@
+{
+  "kind": "zdechlak-otcv8-release",
+  "version": "1.0.9",
+  "sequence": 6,
+  "platform": "windows-x64",
+  "protocol": 860,
+  "host": "146.59.52.154",
+  "login_port": 7171,
+  "game_port": 7172,
+  "engine": "OTCv8-recovered-FURIA",
+  "bots": [
+    "CaveBot",
+    "TargetBot",
+    "vBot_4.8"
+  ],
+  "licensed_things_included": true,
+  "key_purpose": "release",
+  "update_marker": "ZDECHLAK-HOTFIX-1.0.9",
+  "channel_note": "stable-prototype-login-bg-ZDECHLAKTEST",
+  "userdata_appdata": "ZDECHLAKTEST",
+  "login_background": "data/images/background.png",
+  "login_background_style": "cover-centered-no-stretch",
+  "purpose": "stable-shop-catalog-ui-http-hotfix",
+  "hotfix_for": "1.0.8",
+  "preserves": "1.0.7-initlua-log-scrub,1.0.8-shop-button-redirect",
+  "built_at": 1794423879,
+  "buy_points_url": "https://zdechlak.pl/points"
+}

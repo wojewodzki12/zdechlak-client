@@ -1,0 +1,10 @@
+Module
+  name: client_zdechlak_boot
+  description: In-client signed update progress UI (ZDECHLAK)
+  author: ZDECHLAK
+  website: https://zdechlak.pl
+  sandboxed: true
+  scripts: [ client_zdechlak_boot ]
+  dependencies: [ client_background, client_entergame ]
+  @onLoad: init()
+  @onUnload: terminate()

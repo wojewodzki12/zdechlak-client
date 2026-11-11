@@ -1,4 +1,4 @@
 ZDECHLAK OTC updates/v2 — Stable tip
-Client: 1.0.14 (sequence 15)
+Client: 1.0.15 (sequence 16)
 Launcher: 1.0.12 (sequence 6)
-Feature: shop categories, banner, website item icons
+Feature: shop FlatPanel categories + packaged website PNG thumbnails

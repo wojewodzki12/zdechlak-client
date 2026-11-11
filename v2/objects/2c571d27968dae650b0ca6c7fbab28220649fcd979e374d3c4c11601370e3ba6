@@ -1,0 +1,193 @@
+MainWindow
+  id: zdechlakShopWindow
+  !text: tr('ZDECHLAK SHOP')
+  size: 720 460
+  @onEscape: modules.game_zdechlak_shop.hide()
+
+  Panel
+    id: headerPanel
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.right: parent.right
+    height: 28
+    layout: horizontalBox
+    padding-left: 2
+
+    Label
+      id: balanceLabel
+      !text: tr('Shop Points: —')
+      text-auto-resize: true
+      color: #e8c56a
+
+    HorizontalSeparator
+      width: 12
+      opacity: 0
+
+    Button
+      id: refreshButton
+      !text: tr('Refresh')
+      width: 80
+      height: 22
+      @onClick: modules.game_zdechlak_shop.refresh()
+
+    Button
+      id: buyPointsButton
+      !text: tr('BUY POINTS')
+      width: 100
+      height: 22
+      @onClick: modules.game_zdechlak_shop.buyPoints()
+
+  HorizontalSeparator
+    id: headerSep
+    anchors.top: headerPanel.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 4
+
+  Panel
+    id: bodyPanel
+    anchors.top: headerSep.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: footerSep.top
+    margin-top: 6
+    margin-bottom: 6
+
+    Panel
+      id: categoryPanel
+      anchors.top: parent.top
+      anchors.left: parent.left
+      anchors.bottom: parent.bottom
+      width: 150
+      layout:
+        type: verticalBox
+
+      Label
+        !text: tr('Categories')
+        color: #c9a227
+        text-auto-resize: true
+
+      VerticalScrollBar
+        id: categoryScrollBar
+        anchors.top: prev.bottom
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        step: 14
+        pixels-scroll: true
+
+      TextList
+        id: categoryList
+        anchors.top: prev.top
+        anchors.left: parent.left
+        anchors.right: categoryScrollBar.left
+        anchors.bottom: parent.bottom
+        vertical-scrollbar: categoryScrollBar
+        focusable: false
+        @onChildFocusChange: modules.game_zdechlak_shop.onCategoryFocusChange
+
+    VerticalSeparator
+      id: bodySep
+      anchors.top: parent.top
+      anchors.bottom: parent.bottom
+      anchors.left: categoryPanel.right
+      margin-left: 6
+      margin-right: 6
+
+    Panel
+      id: productsPanel
+      anchors.top: parent.top
+      anchors.left: bodySep.right
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+
+      VerticalScrollBar
+        id: productScrollBar
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        step: 28
+        pixels-scroll: true
+
+      Panel
+        id: productList
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: productScrollBar.left
+        anchors.bottom: parent.bottom
+        layout:
+          type: grid
+          cell-size: 160 150
+          cell-spacing: 6
+          flow: true
+        vertical-scrollbar: productScrollBar
+
+  HorizontalSeparator
+    id: footerSep
+    anchors.bottom: statusLabel.top
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-bottom: 4
+
+  Label
+    id: statusLabel
+    anchors.bottom: closeButton.top
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-bottom: 6
+    height: 16
+    !text: tr('Ready')
+    color: #aaaaaa
+
+  Button
+    id: closeButton
+    !text: tr('Close')
+    width: 80
+    anchors.bottom: parent.bottom
+    anchors.right: parent.right
+    @onClick: modules.game_zdechlak_shop.hide()
+
+ZdechlakShopProduct < UIWidget
+  size: 160 150
+  image-source: /images/ui/panel_flat
+  image-border: 4
+  focusable: true
+  phantom: false
+
+  UIItem
+    id: item
+    anchors.top: parent.top
+    anchors.horizontalCenter: parent.horizontalCenter
+    margin-top: 8
+    size: 32 32
+    virtual: true
+    phantom: true
+
+  Label
+    id: name
+    anchors.top: item.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 6
+    text-align: center
+    text-wrap: true
+    font: verdana-11px-rounded
+    color: #f0e6c8
+
+  Label
+    id: price
+    anchors.top: name.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 2
+    text-align: center
+    color: #e8c56a
+    font: verdana-11px-rounded
+
+  Button
+    id: buyButton
+    !text: tr('BUY')
+    anchors.bottom: parent.bottom
+    anchors.horizontalCenter: parent.horizontalCenter
+    margin-bottom: 8
+    width: 70
+    height: 20

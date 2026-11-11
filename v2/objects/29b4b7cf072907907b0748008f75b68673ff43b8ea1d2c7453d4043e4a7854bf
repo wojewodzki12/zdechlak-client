@@ -1,0 +1,590 @@
+-- ZDECHLAK live shop: website is the single source of truth.
+-- Catalog, prices and balances come from https://zdechlak.pl/?p=otc-shop
+
+local API_BASE = 'https://zdechlak.pl/?p=otc-shop'
+local BUY_POINTS_URL = 'https://zdechlak.pl/?p=points'
+local HTTP_TIMEOUT = 15
+
+local shopWindow = nil
+local shopButton = nil
+local confirmWindow = nil
+local msgWindow = nil
+
+local shopToken = nil
+local shopTokenExpires = 0
+local balance = nil
+local categories = {}
+local products = {}
+local selectedCategoryId = nil
+local loading = false
+local pendingAuth = false
+
+local function setStatus(text, color)
+  if not shopWindow then
+    return
+  end
+  local label = shopWindow:getChildById('statusLabel')
+  if label then
+    label:setText(text or '')
+    if color then
+      label:setColor(color)
+    end
+  end
+end
+
+local function setBalanceLabel()
+  if not shopWindow then
+    return
+  end
+  local label = shopWindow:getChildById('balanceLabel')
+  if not label then
+    return
+  end
+  if balance == nil then
+    label:setText(tr('Shop Points: —'))
+  else
+    label:setText(tr('Shop Points: %s', tostring(balance)))
+  end
+end
+
+local function withHttpTimeout(fn)
+  local previous = HTTP.timeout
+  HTTP.timeout = HTTP_TIMEOUT
+  local ok, err = pcall(fn)
+  HTTP.timeout = previous
+  if not ok then
+    g_logger.error('[zdechlak-shop] ' .. tostring(err))
+  end
+end
+
+local function apiUrl(action)
+  return API_BASE .. '&action=' .. action
+end
+
+local function authHeaders()
+  if not shopToken or shopToken == '' then
+    return nil
+  end
+  -- HTTP.postJSON does not expose custom headers in stock OTCv8.
+  -- Token is sent in JSON body as shop_token AND query for balance GETs via post.
+  return shopToken
+end
+
+local function accountCredentials()
+  local account = G and G.account or ''
+  local password = G and G.password or ''
+  if (not account or account == '') and modules.client_entergame then
+    -- fallback: nothing safer than empty
+  end
+  return account or '', password or ''
+end
+
+local function clearAuth()
+  shopToken = nil
+  shopTokenExpires = 0
+end
+
+local function destroyConfirm()
+  if confirmWindow then
+    confirmWindow:destroy()
+    confirmWindow = nil
+  end
+end
+
+local function destroyMsg()
+  if msgWindow then
+    msgWindow:destroy()
+    msgWindow = nil
+  end
+end
+
+local function showMessage(title, message)
+  destroyMsg()
+  msgWindow = displayInfoBox(title, message)
+  msgWindow.onOk = function()
+    destroyMsg()
+  end
+end
+
+local function widgetAlive(widget)
+  if not widget then
+    return false
+  end
+  local ok, destroyed = pcall(function()
+    return widget:isDestroyed()
+  end)
+  if ok and destroyed then
+    return false
+  end
+  return true
+end
+
+local function ensureUi()
+  if widgetAlive(shopWindow) then
+    return true
+  end
+  shopWindow = nil
+  local ok, widget = pcall(function()
+    return g_ui.displayUI('game_zdechlak_shop')
+  end)
+  if not ok or not widget then
+    g_logger.error('[zdechlak-shop] displayUI failed: ' .. tostring(widget))
+    showMessage(tr('ZDECHLAK SHOP'), tr('Could not open shop window UI. Please update the client.'))
+    return false
+  end
+  -- Style-only OTUI roots return nil/invalid; require a real window id.
+  local wid = nil
+  pcall(function() wid = widget:getId() end)
+  if not wid or wid == '' then
+    g_logger.error('[zdechlak-shop] displayUI returned widget without id')
+    pcall(function() widget:destroy() end)
+    showMessage(tr('ZDECHLAK SHOP'), tr('Shop UI failed to create a window. Please update the client.'))
+    return false
+  end
+  shopWindow = widget
+  shopWindow:hide()
+  setBalanceLabel()
+  setStatus(tr('Ready'), '#aaaaaa')
+  return true
+end
+
+local function renderCategories()
+  if not shopWindow then
+    return
+  end
+  local list = shopWindow:recursiveGetChildById('categoryList')
+  if not list then
+    return
+  end
+  list:destroyChildren()
+
+  local all = g_ui.createWidget('TextListLabel', list)
+  all:setId('cat_all')
+  all:setText(tr('All'))
+  all.categoryId = nil
+
+  for _, cat in ipairs(categories) do
+    local w = g_ui.createWidget('TextListLabel', list)
+    w:setId('cat_' .. tostring(cat.id))
+    w:setText(cat.name or ('#' .. tostring(cat.id)))
+    w.categoryId = cat.id
+  end
+
+  if list:getChildCount() > 0 then
+    list:focusChild(list:getFirstChild())
+  end
+end
+
+local function productMatchesCategory(product)
+  if selectedCategoryId == nil then
+    return true
+  end
+  return tonumber(product.category_id) == tonumber(selectedCategoryId)
+end
+
+local function clearProducts()
+  if not shopWindow then
+    return
+  end
+  local panel = shopWindow:recursiveGetChildById('productList')
+  if panel then
+    panel:destroyChildren()
+  end
+end
+
+local function renderProducts()
+  if not shopWindow then
+    return
+  end
+  local panel = shopWindow:recursiveGetChildById('productList')
+  if not panel then
+    return
+  end
+  panel:destroyChildren()
+
+  for _, product in ipairs(products) do
+    if productMatchesCategory(product) then
+      local card = g_ui.createWidget('ZdechlakShopProduct', panel)
+      card:setId('offer_' .. tostring(product.id))
+      card.product = product
+
+      local name = card:getChildById('name')
+      if name then
+        name:setText(product.name or '')
+      end
+      local price = card:getChildById('price')
+      if price then
+        price:setText(tostring(product.price or 0) .. ' SP')
+      end
+      local item = card:getChildById('item')
+      if item and tonumber(product.item_id or 0) > 0 then
+        item:setItemId(tonumber(product.item_id))
+        item:setItemCount(math.max(1, tonumber(product.item_count or 1)))
+      end
+
+      local buy = card:getChildById('buyButton')
+      if buy then
+        local purchaseable = product.purchaseable_in_otc ~= false
+        buy:setEnabled(purchaseable)
+        if not purchaseable then
+          buy:setText(tr('WEB'))
+        end
+        buy.onClick = function()
+          modules.game_zdechlak_shop.requestPurchase(product)
+        end
+      end
+    end
+  end
+end
+
+local function onCatalogData(data)
+  local catalog = data.catalog or data
+  categories = catalog.categories or {}
+  products = catalog.products or {}
+  if catalog.buy_points_url and catalog.buy_points_url ~= '' then
+    BUY_POINTS_URL = catalog.buy_points_url
+  end
+  renderCategories()
+  renderProducts()
+  setStatus(tr('Catalog updated (%s products)', tostring(#products)), '#8fdf8f')
+end
+
+local function fetchCatalog(after)
+  loading = true
+  setStatus(tr('Loading catalog…'), '#cccccc')
+  if not HTTP or not HTTP.getJSON then
+    loading = false
+    setStatus(tr('HTTP API unavailable in this client build'), '#ff8080')
+    showMessage(tr('ZDECHLAK SHOP'), tr('This client cannot reach the website shop API (HTTP missing).'))
+    if after then after(false) end
+    return
+  end
+  withHttpTimeout(function()
+    HTTP.getJSON(apiUrl('catalog'), function(data, err)
+      loading = false
+      if err or not data then
+        local msg = tostring(err or 'connection failed')
+        setStatus(tr('Catalog error: %s', msg), '#ff8080')
+        showMessage(tr('Shop connection error'), tr('Could not load the website catalog.') .. '\n\n' .. msg .. '\n\n' .. tr('The shop window stays open so you can retry.'))
+        if after then after(false) end
+        return
+      end
+      if data.ok == false then
+        local msg = (data.error and data.error.message) or 'catalog failed'
+        setStatus(tr('Catalog error: %s', msg), '#ff8080')
+        showMessage(tr('Shop catalog error'), msg)
+        if after then after(false) end
+        return
+      end
+      onCatalogData(data)
+      if after then after(true) end
+    end)
+  end)
+end
+
+local function fetchBalance(after)
+  if not shopToken then
+    if after then after(false) end
+    return
+  end
+  setStatus(tr('Refreshing balance…'), '#cccccc')
+  withHttpTimeout(function()
+    -- Use POST so Authorization can be mirrored via body for clients without custom headers.
+    HTTP.postJSON(apiUrl('balance'), { shop_token = shopToken }, function(data, err)
+      if err or not data or data.ok == false then
+        -- retry once via dedicated auth header path is unavailable; show error
+        setStatus(tr('Balance refresh failed'), '#ff8080')
+        if after then after(false) end
+        return
+      end
+      balance = tonumber(data.balance)
+      setBalanceLabel()
+      setStatus(tr('Balance updated'), '#8fdf8f')
+      if after then after(true) end
+    end)
+  end)
+end
+
+-- Extend API page to accept shop_token in JSON when Authorization header missing.
+-- Client still prefers Bearer once headers are available in future OTC builds.
+
+local function authenticate(after)
+  local account, password = accountCredentials()
+  if account == '' or password == '' then
+    setStatus(tr('Missing account session. Re-login to use the shop.'), '#ff8080')
+    showMessage(tr('ZDECHLAK SHOP'), tr('Shop authentication requires the account used to log in. Please relog and try again.'))
+    if after then after(false) end
+    return
+  end
+  if pendingAuth then
+    return
+  end
+  pendingAuth = true
+  setStatus(tr('Authenticating shop session…'), '#cccccc')
+  withHttpTimeout(function()
+    HTTP.postJSON(apiUrl('auth'), { account = account, password = password }, function(data, err)
+      pendingAuth = false
+      if err or not data or data.ok == false then
+        clearAuth()
+        local msg = (data and data.error and data.error.message) or tostring(err or 'auth failed')
+        setStatus(tr('Auth failed: %s', msg), '#ff8080')
+        if after then after(false) end
+        return
+      end
+      shopToken = data.token
+      shopTokenExpires = os.time() + tonumber(data.expires_in or 900)
+      balance = tonumber(data.balance)
+      setBalanceLabel()
+      setStatus(tr('Shop session ready'), '#8fdf8f')
+      if after then after(true) end
+    end)
+  end)
+end
+
+local function ensureAuthenticated(after)
+  if shopToken and shopTokenExpires > os.time() + 30 then
+    if after then after(true) end
+    return
+  end
+  authenticate(after)
+end
+
+local function optionChoicesText(product, selections)
+  local lines = {}
+  for _, opt in ipairs(product.options or {}) do
+    local selectedId = selections and selections[opt.key]
+    local chosen = nil
+    for _, choice in ipairs(opt.choices or {}) do
+      if tonumber(choice.id) == tonumber(selectedId) then
+        chosen = choice.name
+        break
+      end
+    end
+    table.insert(lines, string.format('%s: %s', opt.label or opt.key, chosen or tr('(not selected)')))
+  end
+  return table.concat(lines, '\n')
+end
+
+local function collectRequiredOptions(product, done)
+  local options = product.options or {}
+  if #options == 0 then
+    done({})
+    return
+  end
+
+  local selections = {}
+  local index = 1
+
+  local function askNext()
+    if index > #options then
+      done(selections)
+      return
+    end
+    local opt = options[index]
+    index = index + 1
+    local choices = opt.choices or {}
+    if #choices == 0 then
+      showMessage(tr('Unavailable option'), tr('Option "%s" has no valid choices. Purchase blocked.', opt.label or opt.key))
+      return
+    end
+
+    local buttons = {}
+    for _, choice in ipairs(choices) do
+      local choiceCopy = choice
+      table.insert(buttons, {
+        text = choiceCopy.name or tostring(choiceCopy.id),
+        callback = function()
+          destroyConfirm()
+          selections[opt.key] = tonumber(choiceCopy.id)
+          askNext()
+        end
+      })
+    end
+    table.insert(buttons, { text = tr('Cancel'), callback = destroyConfirm })
+    destroyConfirm()
+    confirmWindow = displayGeneralBox(
+      tr('Select %s', opt.label or opt.key),
+      tr('Choose one option for %s.\nNo default is applied.', product.name or 'offer'),
+      buttons
+    )
+  end
+
+  askNext()
+end
+
+local function doPurchase(product, playerName, selections)
+  local idem = string.format('otc-%s-%s-%s', tostring(product.id), tostring(os.time()), tostring(math.random(100000, 999999)))
+  setStatus(tr('Purchasing…'), '#cccccc')
+  local body = {
+    offer_id = product.id,
+    player_name = playerName,
+    idempotency_key = idem,
+    shop_token = shopToken,
+    selections = selections or {},
+  }
+  if selections and selections.weapon then
+    -- Server maps item id → variant; do not invent defaults client-side.
+  end
+  withHttpTimeout(function()
+    HTTP.postJSON(apiUrl('purchase'), body, function(data, err)
+      if err or not data then
+        setStatus(tr('Purchase failed: connection error'), '#ff8080')
+        showMessage(tr('Purchase failed'), tr('Connection error. If points were deducted, contact support with time of purchase.'))
+        fetchBalance()
+        return
+      end
+      if data.ok == false then
+        local msg = (data.error and data.error.message) or 'Purchase failed'
+        if data.balance ~= nil then
+          balance = tonumber(data.balance)
+          setBalanceLabel()
+        else
+          fetchBalance()
+        end
+        setStatus(tr('Purchase failed'), '#ff8080')
+        showMessage(tr('Purchase failed'), msg)
+        return
+      end
+      if data.balance ~= nil then
+        balance = tonumber(data.balance)
+        setBalanceLabel()
+      else
+        fetchBalance()
+      end
+      local price = data.purchase and data.purchase.price or product.price
+      setStatus(tr('Purchase OK'), '#8fdf8f')
+      showMessage(tr('Purchase complete'), tr('Bought %s for %s Shop Points.\nItems are delivered by the game server on login/next tick.', product.name or 'offer', tostring(price)))
+    end)
+  end)
+end
+
+function requestPurchase(product)
+  if not product then
+    return
+  end
+  if product.purchaseable_in_otc == false or (product.requires and product.requires.website_only) then
+    showMessage(tr('Website only'), tr('This offer must be purchased on the website shop.'))
+    g_platform.openUrl(BUY_POINTS_URL:gsub('points', 'gifts'))
+    return
+  end
+
+  ensureAuthenticated(function(ok)
+    if not ok then
+      return
+    end
+    local playerName = g_game.getCharacterName()
+    collectRequiredOptions(product, function(selections)
+      destroyConfirm()
+      local opts = optionChoicesText(product, selections)
+      local msg = tr('Buy %s for %s Shop Points?\nDeliver to: %s\n\n%s\nFinal price is always taken from the website.',
+        product.name or 'item', tostring(product.price or '?'), playerName,
+        (opts ~= '' and (opts .. '\n') or ''))
+      confirmWindow = displayGeneralBox(tr('Confirm purchase'), msg, {
+        { text = tr('Buy'), callback = function()
+            destroyConfirm()
+            doPurchase(product, playerName, selections)
+          end },
+        { text = tr('Cancel'), callback = destroyConfirm },
+      })
+    end)
+  end)
+end
+
+function onCategoryFocusChange(list, focused)
+  if not focused then
+    return
+  end
+  selectedCategoryId = focused.categoryId
+  renderProducts()
+end
+
+function refresh()
+  ensureUi()
+  fetchCatalog(function()
+    ensureAuthenticated(function(ok)
+      if ok then
+        fetchBalance()
+      end
+    end)
+  end)
+end
+
+function buyPoints()
+  g_platform.openUrl(BUY_POINTS_URL)
+end
+
+function toggle()
+  if not ensureUi() then
+    return
+  end
+  if shopWindow:isVisible() then
+    hide()
+  else
+    show()
+  end
+end
+
+function show()
+  -- Always raise the window first so API/network failures still show a useful UI.
+  if not ensureUi() then
+    return
+  end
+  shopWindow:show()
+  shopWindow:raise()
+  shopWindow:focus()
+  setStatus(tr('Connecting to shop…'), '#cccccc')
+  refresh()
+end
+
+function hide()
+  if widgetAlive(shopWindow) then
+    shopWindow:hide()
+  end
+  destroyConfirm()
+end
+
+function init()
+  connect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd
+  })
+  -- Do not create a second topmenu Shop button. OTCv8 already has game_shop's
+  -- Shop/Store control; overlay/modules/game_shop/shop.lua redirects it here.
+  shopButton = nil
+  g_logger.info('[zdechlak-shop] module loaded; waiting for Shop/Store button redirect')
+  if g_game.isOnline() then
+    onGameStart()
+  end
+end
+
+function terminate()
+  disconnect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd
+  })
+  hide()
+  destroyMsg()
+  if shopWindow then
+    shopWindow:destroy()
+    shopWindow = nil
+  end
+  shopButton = nil
+  clearAuth()
+end
+
+function onGameStart()
+  clearAuth()
+  balance = nil
+  -- Do not force-create UI until the player opens the shop; avoids startup errors
+  -- if styles failed to load. Labels refresh on next show().
+  if widgetAlive(shopWindow) then
+    setBalanceLabel()
+  end
+end
+
+function onGameEnd()
+  hide()
+  clearAuth()
+  clearProducts()
+  balance = nil
+end

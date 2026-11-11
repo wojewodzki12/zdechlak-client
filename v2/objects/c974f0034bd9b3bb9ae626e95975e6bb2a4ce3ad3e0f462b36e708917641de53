@@ -1,0 +1,198 @@
+ZdechlakShopCategory < Panel
+  height: 28
+  focusable: true
+  background-color: alpha
+
+  $focus:
+    background-color: #ffffff22
+
+  Label
+    id: name
+    anchors.fill: parent
+    margin-left: 8
+    margin-right: 4
+    text-align: left
+    color: #f0e6c8
+    font: verdana-11px-rounded
+
+ZdechlakShopOffer < Panel
+  height: 70
+  background-color: alpha
+  focusable: true
+
+  $focus:
+    background-color: #ffffff18
+
+  UIItem
+    id: item
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.bottom: parent.bottom
+    margin-top: 10
+    margin-bottom: 10
+    margin-left: 6
+    virtual: true
+    phantom: true
+    size: 48 48
+
+  Label
+    id: title
+    anchors.top: parent.top
+    anchors.left: item.right
+    anchors.right: buyButton.left
+    margin-top: 6
+    margin-left: 8
+    margin-right: 8
+    text-align: left
+    color: #f0e6c8
+    font: verdana-11px-rounded
+
+  Label
+    id: description
+    anchors.top: title.bottom
+    anchors.left: item.right
+    anchors.right: buyButton.left
+    anchors.bottom: parent.bottom
+    margin-top: 2
+    margin-left: 8
+    margin-right: 8
+    margin-bottom: 4
+    text-align: topleft
+    text-wrap: true
+    color: #c8c8c8
+    font: verdana-11px-monochrome
+
+  Button
+    id: buyButton
+    !text: tr('BUY')
+    width: 70
+    height: 24
+    anchors.verticalCenter: parent.verticalCenter
+    anchors.right: parent.right
+    margin-right: 10
+
+MainWindow
+  id: zdechlakShopWindow
+  !text: tr('ZDECHLAK SHOP')
+  size: 760 500
+  @onEscape: modules.game_zdechlak_shop.hide()
+
+  Panel
+    id: infoPanel
+    anchors.top: parent.top
+    anchors.left: parent.left
+    width: 200
+    height: 86
+
+    Label
+      id: balanceLabel
+      anchors.top: parent.top
+      anchors.left: parent.left
+      anchors.right: parent.right
+      margin-top: 4
+      text-align: center
+      !text: tr('Zdechlak Coins: -')
+      color: #e8c56a
+      font: verdana-11px-rounded
+
+    Button
+      id: buyCoinsButton
+      !text: tr('BUY COINS')
+      width: 150
+      height: 22
+      anchors.horizontalCenter: parent.horizontalCenter
+      anchors.top: balanceLabel.bottom
+      margin-top: 8
+      @onClick: modules.game_zdechlak_shop.buyPoints()
+
+    Button
+      id: refreshButton
+      !text: tr('Refresh')
+      width: 150
+      height: 22
+      anchors.horizontalCenter: parent.horizontalCenter
+      anchors.top: buyCoinsButton.bottom
+      margin-top: 6
+      @onClick: modules.game_zdechlak_shop.refresh()
+
+  Label
+    id: categoriesTitle
+    anchors.top: infoPanel.bottom
+    anchors.left: infoPanel.left
+    anchors.right: infoPanel.right
+    margin-top: 8
+    !text: tr('Categories')
+    color: #c9a227
+    font: verdana-11px-rounded
+
+  TextList
+    id: categories
+    vertical-scrollbar: categoriesScrollBar
+    anchors.top: categoriesTitle.bottom
+    anchors.left: infoPanel.left
+    anchors.right: infoPanel.right
+    anchors.bottom: statusLabel.top
+    margin-top: 4
+    margin-bottom: 8
+    padding: 1
+    focusable: false
+    @onChildFocusChange: modules.game_zdechlak_shop.onCategoryFocusChange
+
+  VerticalScrollBar
+    id: categoriesScrollBar
+    anchors.top: categories.top
+    anchors.bottom: categories.bottom
+    anchors.right: categories.right
+    step: 28
+    pixels-scroll: true
+
+  Label
+    id: productsTitle
+    anchors.top: parent.top
+    anchors.left: infoPanel.right
+    anchors.right: parent.right
+    margin-left: 12
+    !text: tr('Products')
+    color: #c9a227
+    font: verdana-11px-rounded
+
+  TextList
+    id: products
+    vertical-scrollbar: productsScrollBar
+    anchors.top: productsTitle.bottom
+    anchors.left: infoPanel.right
+    anchors.right: parent.right
+    anchors.bottom: statusLabel.top
+    margin-top: 4
+    margin-left: 12
+    margin-bottom: 8
+    padding: 1
+    focusable: false
+
+  VerticalScrollBar
+    id: productsScrollBar
+    anchors.top: products.top
+    anchors.bottom: products.bottom
+    anchors.right: products.right
+    step: 35
+    pixels-scroll: true
+
+  Label
+    id: statusLabel
+    anchors.bottom: closeButton.top
+    anchors.left: parent.left
+    anchors.right: closeButton.left
+    margin-bottom: 8
+    margin-right: 8
+    height: 16
+    !text: tr('Ready')
+    color: #aaaaaa
+
+  Button
+    id: closeButton
+    !text: tr('Close')
+    width: 80
+    height: 22
+    anchors.bottom: parent.bottom
+    anchors.right: parent.right
+    @onClick: modules.game_zdechlak_shop.hide()

@@ -1,0 +1,1511 @@
+-- ZDECHLAK live shop: website is the single source of truth.
+-- Catalog, prices and balances come from https://zdechlak.pl/?p=otc-shop
+-- UI strings stay ASCII-safe for OTCv8 bitmap fonts (no em-dash / ellipsis).
+
+local API_BASE = 'https://zdechlak.pl/?p=otc-shop'
+-- Owner-confirmed points purchase page (not ?p=points, which returns 503).
+local BUY_POINTS_URL = 'https://zdechlak.pl/points'
+local WEBSITE_SHOP_URL = 'https://zdechlak.pl/?p=gifts'
+local HTTP_TIMEOUT = 15
+local HTTP_WATCHDOG_MS = 20000
+-- Packaged website thumbnails (GIF converted to PNG at build time).
+local SHOP_ITEM_IMAGE_DIR = '/images/shop/items/'
+local SHOP_ITEM_FALLBACK = '/images/shop/items/missing.png'
+
+local shopWindow = nil
+local shopButton = nil
+local confirmWindow = nil
+local msgWindow = nil
+
+local shopToken = nil
+local shopTokenExpires = 0
+local balance = nil
+local categories = {}
+local products = {}
+local selectedCategoryId = nil
+local selectedVocationId = nil
+local equipmentExpanded = false
+local EQUIPMENT_CATEGORY_ID = 2
+local loading = false
+local pendingAuth = false
+local catalogRequestId = 0
+local selectingCategory = false
+
+-- Defined early: many helpers call these. Lua locals are not visible above their
+-- declaration, so late definition made callers hit a nil global (Windows runtime).
+local function shopLog(message)
+  -- Never log passwords, tokens, or auth bodies. Logging must never break UI.
+  pcall(function()
+    g_logger.info('[zdechlak-shop] ' .. tostring(message))
+  end)
+end
+
+local function widgetAlive(widget)
+  if not widget then
+    return false
+  end
+  local ok, destroyed = pcall(function()
+    return widget:isDestroyed()
+  end)
+  if ok and destroyed then
+    return false
+  end
+  return true
+end
+
+local function shopChild(id)
+  if not shopWindow then
+    return nil
+  end
+  -- Prefer OTCv8 id property map, then recursive search (nested panels).
+  local direct = shopWindow[id]
+  if direct then
+    return direct
+  end
+  local ok, widget = pcall(function()
+    return shopWindow:recursiveGetChildById(id)
+  end)
+  if ok then
+    return widget
+  end
+  return nil
+end
+
+local function setStatus(text, color)
+  local label = shopChild('statusLabel')
+  if not label then
+    return
+  end
+  label:setText(text or '')
+  if color then
+    label:setColor(color)
+  end
+end
+
+local function setBalanceLabel()
+  -- Balance lives under leftPanel (1.0.16 layout); fall back to recursive id lookup.
+  local label = nil
+  if shopWindow and shopWindow.leftPanel then
+    label = shopWindow.leftPanel.balanceLabel
+  end
+  if not label then
+    label = shopChild('balanceLabel')
+  end
+  if not label then
+    shopLog('balanceLabel widget missing')
+    return
+  end
+  if balance == nil then
+    label:setText('Zdechlak Coins: -')
+  else
+    label:setText('Zdechlak Coins: ' .. tostring(balance))
+  end
+end
+
+local function widgetGeom(widget)
+  if not widget then
+    return 'nil'
+  end
+  local ok, w, h, vis = pcall(function()
+    return widget:getWidth(), widget:getHeight(), widget:isVisible()
+  end)
+  if not ok then
+    return 'err'
+  end
+  return 'w=' .. tostring(w) .. ' h=' .. tostring(h) .. ' vis=' .. tostring(vis)
+end
+
+local function shopItemImagePath(itemId)
+  local id = tonumber(itemId or 0) or 0
+  if id <= 0 then
+    return SHOP_ITEM_FALLBACK
+  end
+  return SHOP_ITEM_IMAGE_DIR .. tostring(id) .. '.png'
+end
+
+local function loadSavedCategoryId()
+  local ok, node = pcall(function()
+    return g_settings.getNode('zdechlak_shop')
+  end)
+  if ok and type(node) == 'table' and node.selected_category_id ~= nil then
+    return tonumber(node.selected_category_id)
+  end
+  return nil
+end
+
+local function saveSelectedCategoryId(categoryId)
+  local id = tonumber(categoryId)
+  if not id then
+    return
+  end
+  pcall(function()
+    local node = g_settings.getNode('zdechlak_shop') or {}
+    node.selected_category_id = id
+    g_settings.setNode('zdechlak_shop', node)
+  end)
+end
+
+local function productVocationIds(product)
+  local ids = {}
+  if type(product) ~= 'table' then
+    return ids
+  end
+  local raw = product.vocation_ids
+  if type(raw) ~= 'table' then
+    return ids
+  end
+  for _, v in ipairs(raw) do
+    local n = tonumber(v)
+    if n then
+      ids[#ids + 1] = n
+    end
+  end
+  return ids
+end
+
+local function countProductsInCategory(categoryId, vocationId)
+  local n = 0
+  local cid = tonumber(categoryId)
+  local vid = tonumber(vocationId)
+  for _, product in ipairs(products) do
+    if tonumber(product.category_id) == cid then
+      if not vid then
+        n = n + 1
+      else
+        for _, pv in ipairs(productVocationIds(product)) do
+          if pv == vid then
+            n = n + 1
+            break
+          end
+        end
+      end
+    end
+  end
+  return n
+end
+
+local function findCategoryChildren(categoryId)
+  local cat = findCategoryById(categoryId)
+  if not cat or type(cat.children) ~= 'table' then
+    return {}
+  end
+  return cat.children
+end
+
+local function findCategoryById(categoryId)
+  local cid = tonumber(categoryId)
+  if not cid then
+    return nil
+  end
+  for _, cat in ipairs(categories) do
+    if tonumber(cat.id) == cid then
+      return cat
+    end
+  end
+  return nil
+end
+
+local function trustedBannerUrl(url)
+  if type(url) ~= 'string' or url == '' then
+    return nil
+  end
+  -- Only allow HTTPS images from the shop website host. No HTML/scripts.
+  local lower = url:lower()
+  if lower:find('^https://zdechlak%.pl/') ~= 1 and lower:find('^https://www%.zdechlak%.pl/') ~= 1 then
+    return nil
+  end
+  if not (lower:find('%.png') or lower:find('%.jpg') or lower:find('%.jpeg') or lower:find('%.gif') or lower:find('%.webp')) then
+    return nil
+  end
+  return url
+end
+
+local function applyBanner(catalog)
+  if not shopWindow then
+    return
+  end
+  -- Banner is a fixed-height child of rightPanel (does not scroll with products).
+  local panel = nil
+  if shopWindow.rightPanel and shopWindow.rightPanel.bannerPanel then
+    panel = shopWindow.rightPanel.bannerPanel
+  end
+  if not panel then
+    panel = shopChild('bannerPanel')
+  end
+  if not panel then
+    shopLog('bannerPanel missing')
+    return
+  end
+  pcall(function()
+    panel:setVisible(true)
+    panel:setHeight(140)
+  end)
+  shopLog('banner geom=' .. widgetGeom(panel) .. ' parent=' .. widgetGeom(panel:getParent()))
+
+  local image = panel.bannerImage or panel:getChildById('bannerImage')
+  local fallback = panel.bannerFallback or panel:getChildById('bannerFallback')
+  local remote = nil
+  if type(catalog) == 'table' then
+    remote = trustedBannerUrl(catalog.banner_image_url or catalog.banner_url)
+  end
+
+  if fallback then
+    fallback:setVisible(true)
+    fallback:setText('ZDECHLAK SPECIAL OFFERS')
+  end
+  if image then
+    image:setVisible(false)
+    pcall(function()
+      image:setImageSource('')
+    end)
+  end
+
+  -- Optional remote promotional image only from trusted zdechlak.pl HTTPS URLs.
+  -- Placeholder remains visible until a real image is ready (no invented offers).
+  if remote and HTTP and HTTP.downloadImage and image then
+    HTTP.downloadImage(remote, function(path, err)
+      if err or not path or path == '' then
+        shopLog('banner download failed; using local fallback')
+        return
+      end
+      if not widgetAlive(shopWindow) then
+        return
+      end
+      pcall(function()
+        image:setImageSource(path)
+        image:setVisible(true)
+        if fallback then
+          fallback:setVisible(false)
+        end
+        panel:setVisible(true)
+      end)
+    end)
+  end
+end
+
+local function openExternalUrl(url)
+  if not url or url == '' then
+    return
+  end
+  -- Windows OTCv8 is more reliable when openUrl is deferred off the click stack.
+  scheduleEvent(function()
+    g_platform.openUrl(url)
+  end, 50)
+end
+
+local function normalizeBuyPointsUrl(url)
+  if not url or url == '' then
+    return 'https://zdechlak.pl/points'
+  end
+  -- Legacy query form is broken (HTTP 503); keep the owner-confirmed path URL.
+  if url == 'https://zdechlak.pl/?p=points' or url:find('?p=points', 1, true) then
+    return 'https://zdechlak.pl/points'
+  end
+  return url
+end
+
+local function apiUrl(action)
+  return API_BASE .. '&action=' .. action
+end
+
+-- OTCv8 HttpResult is a table {status,headers,body,url,...}; raw string is also accepted.
+local function extractResponseBody(data)
+  if type(data) == 'string' then
+    return data, nil
+  end
+  if type(data) == 'table' and type(data.body) == 'string' then
+    return data.body, tonumber(data.status)
+  end
+  return nil, nil
+end
+
+local function classifyHttpBody(body)
+  if body == nil or body == '' then
+    return 'empty', 'empty response'
+  end
+  if type(body) ~= 'string' then
+    return 'unknown', 'non-string body type: ' .. type(body)
+  end
+  local lower = body:lower()
+  if lower:find('<html', 1, true) or lower:find('just a moment', 1, true) or lower:find('cf-browser-verification', 1, true) then
+    return 'html_challenge', 'Cloudflare/HTML challenge instead of JSON'
+  end
+  if body:match('^%s*{') or body:match('^%s*%[') then
+    return 'json_text', nil
+  end
+  return 'unknown', 'non-JSON response: ' .. body:sub(1, 80)
+end
+
+local function decodeJsonBody(body)
+  local kind, detail = classifyHttpBody(body)
+  if kind ~= 'json_text' then
+    return nil, detail
+  end
+  local status, result = pcall(function()
+    return json.decode(body)
+  end)
+  if not status then
+    return nil, 'JSON decode failed: ' .. tostring(result)
+  end
+  return result, nil
+end
+
+local function tableCount(t)
+  if type(t) ~= 'table' then
+    return 0
+  end
+  local n = 0
+  for _ in pairs(t) do
+    n = n + 1
+  end
+  return n
+end
+
+local function asArray(t)
+  if type(t) ~= 'table' then
+    return {}
+  end
+  if #t > 0 then
+    return t
+  end
+  -- Some JSON paths may yield string-keyed maps; normalize to a dense array.
+  local out = {}
+  for _, v in pairs(t) do
+    if type(v) == 'table' then
+      table.insert(out, v)
+    end
+  end
+  return out
+end
+
+local function withHttpTimeout(fn)
+  if not HTTP then
+    return false, 'HTTP global missing'
+  end
+  local previous = HTTP.timeout
+  HTTP.timeout = HTTP_TIMEOUT
+  local ok, err = pcall(fn)
+  HTTP.timeout = previous
+  if not ok then
+    return false, tostring(err)
+  end
+  return true, nil
+end
+
+-- Prefer fixed HTTP.postJSON; fall back to HTTP.post + local JSON decode if needed.
+local function postJson(url, bodyTable, callback)
+  if HTTP and HTTP.postJSON then
+    return HTTP.postJSON(url, bodyTable, callback)
+  end
+  if not HTTP or not HTTP.post then
+    error('HTTP.postJSON/HTTP.post unavailable')
+  end
+  local payload = bodyTable
+  if type(payload) == 'table' then
+    payload = json.encode(payload)
+  end
+  return HTTP.post(url, payload, function(data, err)
+    if err and tostring(err) ~= '' then
+      callback(nil, err)
+      return
+    end
+    local body = extractResponseBody(data)
+    if type(data) == 'table' and data.ok ~= nil and body == nil then
+      callback(data, nil)
+      return
+    end
+    if type(body) ~= 'string' then
+      callback(nil, 'unexpected POST response type: ' .. type(data))
+      return
+    end
+    local status, result = pcall(function()
+      return json.decode(body)
+    end)
+    if not status then
+      callback(nil, 'JSON decode failed: ' .. tostring(result))
+      return
+    end
+    callback(result, nil)
+  end)
+end
+
+local function accountCredentials()
+  -- In-memory session only; never put password in URLs or log lines.
+  local account = ''
+  local password = ''
+  if G then
+    account = tostring(G.account or '')
+    password = tostring(G.password or '')
+  end
+  -- Some OTCv8 builds also keep the login name on the game instance.
+  if account == '' and g_game and g_game.getAccountName then
+    local ok, value = pcall(function()
+      return g_game.getAccountName()
+    end)
+    if ok and value then
+      account = tostring(value)
+    end
+  end
+  return account, password
+end
+
+local function clearAuth()
+  shopToken = nil
+  shopTokenExpires = 0
+end
+
+local function destroyConfirm()
+  if confirmWindow then
+    confirmWindow:destroy()
+    confirmWindow = nil
+  end
+end
+
+local function destroyMsg()
+  if msgWindow then
+    msgWindow:destroy()
+    msgWindow = nil
+  end
+end
+
+local function showMessage(title, message)
+  destroyMsg()
+  msgWindow = displayInfoBox(title, message)
+  msgWindow.onOk = function()
+    destroyMsg()
+  end
+end
+
+local function ensureUi()
+  if widgetAlive(shopWindow) then
+    return true
+  end
+  shopWindow = nil
+  local ok, widget = pcall(function()
+    return g_ui.displayUI('game_zdechlak_shop')
+  end)
+  if not ok or not widget then
+    g_logger.error('[zdechlak-shop] displayUI failed: ' .. tostring(widget))
+    showMessage('ZDECHLAK SHOP', 'Could not open shop window UI. Please update the client.')
+    return false
+  end
+  local wid = nil
+  pcall(function()
+    wid = widget:getId()
+  end)
+  if not wid or wid == '' then
+    g_logger.error('[zdechlak-shop] displayUI returned widget without id')
+    pcall(function()
+      widget:destroy()
+    end)
+    showMessage('ZDECHLAK SHOP', 'Shop UI failed to create a window. Please update the client.')
+    return false
+  end
+  shopWindow = widget
+  -- Force banner placeholder visible even before catalog arrives.
+  applyBanner(nil)
+  shopLog('ui ready left=' .. widgetGeom(shopWindow.leftPanel) .. ' right=' .. widgetGeom(shopWindow.rightPanel) .. ' categories=' .. widgetGeom(shopChild('categories')) .. ' banner=' .. widgetGeom(shopChild('bannerPanel')) .. ' products=' .. widgetGeom(shopChild('products')))
+  shopWindow:hide()
+  setBalanceLabel()
+  setStatus('Ready', '#aaaaaa')
+  return true
+end
+
+local function categoriesList()
+  -- Nested under leftPanel; recursive shopChild is the reliable path.
+  if shopWindow and shopWindow.leftPanel and shopWindow.leftPanel.categories then
+    return shopWindow.leftPanel.categories
+  end
+  return shopChild('categories')
+end
+
+local function clearCategoryChecks(exceptId)
+  local list = categoriesList()
+  if not list then
+    return
+  end
+  for _, child in ipairs(list:getChildren()) do
+    local btn = child.button or child:getChildById('button')
+    if btn and btn.setChecked then
+      local keep = exceptId and child.categoryId == exceptId
+      btn:setChecked(keep and true or false)
+    end
+  end
+end
+
+local function productsList()
+  if shopWindow and shopWindow.rightPanel and shopWindow.rightPanel.products then
+    return shopWindow.rightPanel.products
+  end
+  return shopChild('products')
+end
+
+local function setProductsTitle(text)
+  local title = shopChild('productsTitle')
+  if title then
+    title:setText(text or 'Products')
+  end
+end
+
+local function productMatchesCategory(product)
+  local selected = tonumber(selectedCategoryId)
+  if not selected then
+    return false
+  end
+  if tonumber(product.category_id) ~= selected then
+    return false
+  end
+  -- Equipment vocation sub-filter (website gifts.php profession chips).
+  if selected == EQUIPMENT_CATEGORY_ID then
+    local vid = tonumber(selectedVocationId)
+    if not vid then
+      return false
+    end
+    for _, pv in ipairs(productVocationIds(product)) do
+      if pv == vid then
+        return true
+      end
+    end
+    return false
+  end
+  return true
+end
+
+local function clearProducts()
+  local list = productsList()
+  if list then
+    list:destroyChildren()
+  end
+end
+
+local function shortenText(text, maxLen)
+  text = tostring(text or '')
+  maxLen = maxLen or 120
+  if #text <= maxLen then
+    return text
+  end
+  return text:sub(1, maxLen - 3) .. '...'
+end
+
+local function applyProductIcon(row, product)
+  -- Do NOT use native setItemId sprites; website art is packaged as PNG.
+  if not row then
+    return
+  end
+  local icon = row.icon or row:getChildById('icon')
+  if not icon or not icon.setImageSource then
+    shopLog('offer icon widget missing')
+    return
+  end
+  local itemId = tonumber(product.item_id or 0) or 0
+  local path = shopItemImagePath(itemId)
+  -- Prefer exact packaged PNG; fall back if resource missing.
+  local exists = true
+  if g_resources and g_resources.fileExists then
+    exists = g_resources.fileExists(path)
+  end
+  if not exists then
+    path = SHOP_ITEM_FALLBACK
+  end
+  pcall(function()
+    icon:setImageSource(path)
+  end)
+end
+
+local function renderProducts()
+  if not shopWindow then
+    return 0
+  end
+  local list = productsList()
+  if not list then
+    error('products widget missing')
+  end
+  list:destroyChildren()
+
+  if not tonumber(selectedCategoryId) then
+    setProductsTitle('Products')
+    return 0
+  end
+
+  local shown = 0
+  for _, product in ipairs(products) do
+    if productMatchesCategory(product) then
+      local row = g_ui.createWidget('ZdechlakShopOffer', list)
+      if not row then
+        error('failed to create ZdechlakShopOffer')
+      end
+      row:setId('offer_' .. tostring(product.id))
+      row.product = product
+      shown = shown + 1
+
+      local priceText = tostring(product.price or 0) .. ' ZC'
+      if row.title then
+        row.title:setText(tostring(product.name or '') .. '  (' .. priceText .. ')')
+      end
+      if row.description then
+        local desc = tostring(product.description or '')
+        if product.options and #product.options > 0 then
+          desc = desc .. ' [options]'
+        end
+        row.description:setText(shortenText(desc, 140))
+      end
+      applyProductIcon(row, product)
+
+      if row.buyButton then
+        local purchaseable = product.purchaseable_in_otc ~= false
+        row.buyButton:setEnabled(purchaseable)
+        if not purchaseable then
+          row.buyButton:setText('WEB')
+        else
+          row.buyButton:setText('BUY')
+        end
+        row.buyButton.onClick = function()
+          modules.game_zdechlak_shop.requestPurchase(product)
+        end
+      end
+    end
+  end
+  return shown
+end
+
+local function selectCategory(categoryId, forceRender, vocationId)
+  local cat = findCategoryById(categoryId)
+  if not cat then
+    return false
+  end
+  selectingCategory = true
+  selectedCategoryId = tonumber(cat.id)
+  saveSelectedCategoryId(selectedCategoryId)
+
+  if selectedCategoryId == EQUIPMENT_CATEGORY_ID then
+    local vid = tonumber(vocationId)
+    if not vid or vid < 1 or vid > 4 then
+      vid = tonumber(selectedVocationId) or 1
+    end
+    selectedVocationId = vid
+  else
+    selectedVocationId = nil
+  end
+
+  local list = categoriesList()
+  local highlightId = 'cat_' .. tostring(selectedCategoryId)
+  if selectedCategoryId == EQUIPMENT_CATEGORY_ID and selectedVocationId then
+    highlightId = 'cat_' .. tostring(selectedCategoryId) .. '_v' .. tostring(selectedVocationId)
+  end
+  if list then
+    clearCategoryChecks(nil)
+    local child = list:getChildById(highlightId)
+    -- Fallback to parent Equipment row if vocation row not built yet.
+    if not child then
+      child = list:getChildById('cat_' .. tostring(selectedCategoryId))
+    end
+    if child then
+      local btn = child.button or child:getChildById('button')
+      if btn and btn.setChecked then
+        btn:setChecked(true)
+      end
+      pcall(function()
+        if list.ensureChildVisible then
+          list:ensureChildVisible(child)
+        end
+      end)
+    end
+  end
+  selectingCategory = false
+
+  local count = countProductsInCategory(selectedCategoryId, selectedVocationId)
+  local titleName = tostring(cat.name or 'Products')
+  if selectedCategoryId == EQUIPMENT_CATEGORY_ID and selectedVocationId then
+    local children = type(cat.children) == 'table' and cat.children or {}
+    for _, child in ipairs(children) do
+      if tonumber(child.vocation_id) == selectedVocationId then
+        titleName = tostring(cat.name) .. ' / ' .. tostring(child.name)
+        break
+      end
+    end
+  end
+  setProductsTitle(titleName .. ' (' .. tostring(count) .. ')')
+  shopLog('selectedCategoryId=' .. tostring(selectedCategoryId) .. ' vocation=' .. tostring(selectedVocationId) .. ' count=' .. tostring(count) .. ' listGeom=' .. widgetGeom(list) .. ' banner=' .. widgetGeom(shopChild('bannerPanel')))
+  -- Banner is fixed in rightPanel; keep it visible across category changes.
+  pcall(function()
+    local banner = shopChild('bannerPanel')
+    if banner then
+      banner:setVisible(true)
+      banner:setHeight(140)
+    end
+  end)
+  if forceRender ~= false then
+    local ok, err = pcall(renderProducts)
+    if not ok then
+      setStatus('Product render failed: ' .. tostring(err), '#ff8080')
+      return false
+    end
+  end
+  return true
+end
+
+local function chooseDefaultCategoryId()
+  local saved = loadSavedCategoryId()
+  if saved and findCategoryById(saved) then
+    return saved
+  end
+  if #categories > 0 then
+    return tonumber(categories[1].id)
+  end
+  return nil
+end
+
+local function createCategoryRow(list, styleName, widgetId, categoryId, vocationId, labelText)
+  local w = g_ui.createWidget(styleName, list)
+  if not w then
+    error('failed to create ' .. tostring(styleName) .. ' for id=' .. tostring(widgetId))
+  end
+  w:setId(widgetId)
+  w.categoryId = categoryId
+  w.vocationId = vocationId
+  if w.name then
+    w.name:setText(labelText)
+  end
+  local btn = w.button or w:getChildById('button')
+  if btn then
+    btn.categoryId = categoryId
+    btn.vocationId = vocationId
+    pcall(function()
+      btn:setChecked(false)
+      btn:enable()
+      btn:setVisible(true)
+    end)
+  else
+    error(tostring(styleName) .. ' missing button child for id=' .. tostring(widgetId))
+  end
+  pcall(function()
+    w:setVisible(true)
+    w:enable()
+  end)
+  return w
+end
+
+local function rebuildCategoryWidgets()
+  local list = categoriesList()
+  if not list then
+    error('categories widget missing (shopWindow.categories nil)')
+  end
+  list:destroyChildren()
+  if #categories == 0 then
+    return 0
+  end
+  table.sort(categories, function(a, b)
+    return (tonumber(a.id) or 0) < (tonumber(b.id) or 0)
+  end)
+  local created = 0
+  for _, cat in ipairs(categories) do
+    local cid = tonumber(cat.id)
+    if cid then
+      local count = countProductsInCategory(cid)
+      local label = tostring(cat.name or ('#' .. tostring(cid)))
+      if cid == EQUIPMENT_CATEGORY_ID then
+        label = label .. (equipmentExpanded and ' [-]' or ' [+]')
+      end
+      label = label .. ' (' .. tostring(count) .. ')'
+      createCategoryRow(list, 'ZdechlakShopCategory', 'cat_' .. tostring(cid), cid, nil, label)
+      created = created + 1
+      if cid == EQUIPMENT_CATEGORY_ID and equipmentExpanded then
+        local children = type(cat.children) == 'table' and cat.children or {}
+        for _, child in ipairs(children) do
+          local vid = tonumber(child.vocation_id)
+          if vid then
+            local ccount = countProductsInCategory(cid, vid)
+            local clabel = '  ' .. tostring(child.name or ('#' .. tostring(vid))) .. ' (' .. tostring(ccount) .. ')'
+            createCategoryRow(
+              list,
+              'ZdechlakShopSubCategory',
+              'cat_' .. tostring(cid) .. '_v' .. tostring(vid),
+              cid,
+              vid,
+              clabel
+            )
+            created = created + 1
+          end
+        end
+      end
+    end
+  end
+  return created
+end
+
+local function renderCategories()
+  if not shopWindow then
+    return
+  end
+  local list = categoriesList()
+  if not list then
+    error('categories widget missing (shopWindow.categories nil)')
+  end
+
+  shopLog('categories parsed=' .. tostring(#categories) .. ' listGeom=' .. widgetGeom(list) .. ' parentGeom=' .. widgetGeom(list:getParent()))
+
+  if #categories == 0 then
+    shopLog('categories empty after parse; products=' .. tostring(#products))
+    setStatus('Catalog categories missing from API response.', '#ff8080')
+    selectedCategoryId = nil
+    selectedVocationId = nil
+    clearProducts()
+    setProductsTitle('Products')
+    list:destroyChildren()
+    return
+  end
+
+  local defaultId = chooseDefaultCategoryId()
+  if defaultId == EQUIPMENT_CATEGORY_ID then
+    equipmentExpanded = true
+  end
+
+  local created = rebuildCategoryWidgets()
+  shopLog('category widgets created=' .. tostring(created) .. '/' .. tostring(#categories) .. ' listChildren=' .. tostring(list:getChildCount()) .. ' selectedCategoryId=' .. tostring(selectedCategoryId) .. ' vocation=' .. tostring(selectedVocationId))
+
+  if created == 0 then
+    error('no category widgets were created')
+  end
+
+  if not defaultId then
+    error('no valid category available for default selection')
+  end
+  local defaultVoc = (defaultId == EQUIPMENT_CATEGORY_ID) and 1 or nil
+  if not selectCategory(defaultId, true, defaultVoc) then
+    error('failed to select default category id=' .. tostring(defaultId))
+  end
+end
+
+local function onCatalogData(data)
+  if type(data) ~= 'table' then
+    error('catalog payload is not a table: ' .. type(data))
+  end
+  local catalog = data.catalog or data
+  if type(catalog) ~= 'table' then
+    error('catalog object missing')
+  end
+  -- Reject HttpResult-shaped tables mistaken for catalog (must have products/categories).
+  if catalog.body and not catalog.products and not catalog.categories then
+    error('catalog payload looks like raw HttpResult; body was not unwrapped')
+  end
+  categories = asArray(catalog.categories)
+  products = asArray(catalog.products)
+  if catalog.buy_points_url and catalog.buy_points_url ~= '' then
+    BUY_POINTS_URL = normalizeBuyPointsUrl(catalog.buy_points_url)
+  else
+    BUY_POINTS_URL = 'https://zdechlak.pl/points'
+  end
+  if catalog.website_shop_url and catalog.website_shop_url ~= '' then
+    WEBSITE_SHOP_URL = catalog.website_shop_url
+  end
+  shopLog('render cats=' .. tostring(#categories) .. ' products=' .. tostring(#products))
+  applyBanner(catalog)
+  renderCategories()
+  local shown = 0
+  local list = productsList()
+  if list then
+    shown = list:getChildCount()
+  end
+  if #categories == 0 then
+    setStatus('Catalog has products but no categories.', '#ff8080')
+  elseif #products == 0 then
+    setStatus('Catalog empty (0 products). Press Refresh or check website API.', '#ff8080')
+  else
+    local cat = findCategoryById(selectedCategoryId)
+    local catName = cat and cat.name or tostring(selectedCategoryId)
+    setStatus('Showing ' .. tostring(shown) .. ' in ' .. tostring(catName) .. ' (' .. tostring(#products) .. ' total)', '#8fdf8f')
+  end
+end
+
+local function finishCatalog(ok, message, after)
+  loading = false
+  if message then
+    setStatus(message, ok and '#8fdf8f' or '#ff8080')
+  end
+  if after then
+    after(ok)
+  end
+end
+
+local function fetchCatalog(after)
+  catalogRequestId = catalogRequestId + 1
+  local requestId = catalogRequestId
+  loading = true
+  setStatus('Loading catalog...', '#cccccc')
+
+  if not HTTP or not HTTP.get then
+    finishCatalog(false, 'HTTP API unavailable in this client build', after)
+    showMessage('ZDECHLAK SHOP', 'This client cannot reach the website shop API (HTTP missing).')
+    return
+  end
+
+  scheduleEvent(function()
+    if requestId == catalogRequestId and loading then
+      finishCatalog(false, 'Catalog request timed out after ' .. tostring(HTTP_TIMEOUT) .. 's', after)
+      showMessage('Shop connection error', 'Catalog request timed out.\n\nCheck internet access and Cloudflare access to zdechlak.pl, then press Refresh.')
+    end
+  end, HTTP_WATCHDOG_MS)
+
+  local catalogUrl = apiUrl('catalog')
+  shopLog('GET ' .. catalogUrl)
+  local started, startErr = withHttpTimeout(function()
+    -- HTTP.get returns HttpResult table; corelib unwraps .body. We also unwrap defensively.
+    HTTP.get(catalogUrl, function(data, err)
+      if requestId ~= catalogRequestId then
+        return
+      end
+      if err and tostring(err) ~= '' then
+        local errText = tostring(err)
+        local statusHint = errText:match('(%d%d%d)')
+        local statusPart = statusHint and (' (HTTP ' .. statusHint .. ')') or ''
+        shopLog('catalog error' .. statusPart .. ': ' .. errText)
+        finishCatalog(false, 'Catalog error' .. statusPart .. ': ' .. errText, after)
+        showMessage('Shop connection error', 'Could not load the website catalog' .. statusPart .. '.\n\n' .. errText .. '\n\nThe shop window stays open so you can press Refresh.')
+        return
+      end
+
+      local body, httpStatus = extractResponseBody(data)
+      local bodyLen = body and #body or -1
+      shopLog('catalog cb type=' .. type(data) .. ' httpStatus=' .. tostring(httpStatus) .. ' bodyLen=' .. tostring(bodyLen))
+
+      local decoded = nil
+      local decodeErr = nil
+      if body then
+        decoded, decodeErr = decodeJsonBody(body)
+      elseif type(data) == 'table' and data.ok ~= nil then
+        -- Already decoded JSON object from HTTP.getJSON path.
+        decoded = data
+      else
+        decodeErr = 'unexpected response type: ' .. type(data) .. ' (expected HttpResult.body string)'
+      end
+
+      if decodeErr or not decoded then
+        shopLog('catalog decode failed: ' .. tostring(decodeErr))
+        finishCatalog(false, 'Catalog error: ' .. tostring(decodeErr or 'invalid JSON'), after)
+        showMessage('Shop connection error', 'Could not load the website catalog.\n\n' .. tostring(decodeErr or 'invalid JSON') .. '\n\nPress Refresh to retry.')
+        return
+      end
+
+      if decoded.ok ~= true then
+        local msg = (decoded.error and decoded.error.message) or 'catalog failed'
+        finishCatalog(false, 'Catalog error: ' .. msg, after)
+        showMessage('Shop catalog error', msg)
+        return
+      end
+
+      local catN = tableCount((decoded.catalog or {}).categories)
+      local prodN = tableCount((decoded.catalog or {}).products)
+      shopLog('catalog json ok cats~=' .. tostring(catN) .. ' products~=' .. tostring(prodN))
+
+      local okRender, renderErr = pcall(function()
+        onCatalogData(decoded)
+      end)
+      if not okRender then
+        shopLog('render failed: ' .. tostring(renderErr))
+        finishCatalog(false, 'Catalog UI render failed: ' .. tostring(renderErr), after)
+        showMessage('Shop UI error', 'Catalog downloaded but could not be displayed.\n\n' .. tostring(renderErr))
+        return
+      end
+      finishCatalog(true, nil, after)
+    end)
+  end)
+
+  if not started then
+    finishCatalog(false, 'Catalog request failed to start: ' .. tostring(startErr), after)
+    showMessage('Shop connection error', 'Catalog request failed to start.\n\n' .. tostring(startErr))
+  end
+end
+
+local function fetchBalance(after)
+  if not shopToken then
+    if after then
+      after(false)
+    end
+    return
+  end
+  setStatus('Refreshing balance...', '#cccccc')
+  local started, startErr = withHttpTimeout(function()
+    postJson(apiUrl('balance'), { shop_token = shopToken }, function(data, err)
+      -- Accept only explicit ok==true; never invent a zero balance.
+      if err or type(data) ~= 'table' or data.ok ~= true or data.balance == nil then
+        shopLog('balance failed type=' .. type(data) .. ' err=' .. tostring(err))
+        setStatus('Balance refresh failed', '#ff8080')
+        if after then
+          after(false)
+        end
+        return
+      end
+      balance = tonumber(data.balance)
+      if balance == nil then
+        setStatus('Balance refresh failed: invalid balance value', '#ff8080')
+        if after then
+          after(false)
+        end
+        return
+      end
+      setBalanceLabel()
+      setStatus('Balance updated', '#8fdf8f')
+      if after then
+        after(true)
+      end
+    end)
+  end)
+  if not started then
+    setStatus('Balance request failed: ' .. tostring(startErr), '#ff8080')
+    if after then
+      after(false)
+    end
+  end
+end
+
+local function authenticate(after)
+  local account, password = accountCredentials()
+  local hasAccount = account ~= ''
+  local hasPassword = password ~= ''
+  shopLog('auth begin hasAccount=' .. tostring(hasAccount) .. ' hasPassword=' .. tostring(hasPassword))
+  if not hasAccount or not hasPassword then
+    setBalanceLabel()
+    setStatus('Missing account session. Re-login to use the shop.', '#ff8080')
+    showMessage('ZDECHLAK SHOP', 'Shop authentication requires the account used to log in. Please relog and try again.')
+    if after then
+      after(false)
+    end
+    return
+  end
+  if pendingAuth then
+    return
+  end
+  pendingAuth = true
+  setStatus('Catalog ready. Signing in for Zdechlak Coins...', '#cccccc')
+  local started, startErr = withHttpTimeout(function()
+    -- Body is JSON over HTTPS; account/password are never written to logs or query string.
+    postJson(apiUrl('auth'), { account = account, password = password }, function(data, err)
+      pendingAuth = false
+      -- Never log account/password/token. Require explicit ok==true and numeric balance.
+      if err or type(data) ~= 'table' or data.ok ~= true then
+        clearAuth()
+        local msg = (type(data) == 'table' and data.error and data.error.message) or tostring(err or 'auth failed')
+        local errCode = type(data) == 'table' and data.error and data.error.code
+        shopLog('auth failed code=' .. tostring(errCode) .. ' msg=' .. tostring(msg) .. ' type=' .. type(data))
+        setBalanceLabel()
+        setStatus('Catalog loaded. Balance unavailable: ' .. msg, '#ff8080')
+        if after then
+          after(false)
+        end
+        return
+      end
+      if type(data.token) ~= 'string' or data.token == '' then
+        clearAuth()
+        shopLog('auth ok flag but missing token')
+        setBalanceLabel()
+        setStatus('Catalog loaded. Balance unavailable: missing shop token', '#ff8080')
+        if after then
+          after(false)
+        end
+        return
+      end
+      local bal = tonumber(data.balance)
+      if bal == nil then
+        clearAuth()
+        shopLog('auth ok but balance not numeric type=' .. type(data.balance))
+        setBalanceLabel()
+        setStatus('Catalog loaded. Balance unavailable: invalid balance', '#ff8080')
+        if after then
+          after(false)
+        end
+        return
+      end
+      shopToken = data.token
+      shopTokenExpires = os.time() + tonumber(data.expires_in or 900)
+      balance = bal
+      setBalanceLabel()
+      shopLog('auth ok balanceUpdated=true')
+      setStatus('Catalog loaded. Zdechlak Coins: ' .. tostring(balance), '#8fdf8f')
+      if after then
+        after(true)
+      end
+    end)
+  end)
+  if not started then
+    pendingAuth = false
+    setStatus('Auth request failed: ' .. tostring(startErr), '#ff8080')
+    if after then
+      after(false)
+    end
+  end
+end
+
+local function ensureAuthenticated(after)
+  if shopToken and shopTokenExpires > os.time() + 30 then
+    if after then
+      after(true)
+    end
+    return
+  end
+  authenticate(after)
+end
+
+local function optionChoicesText(product, selections)
+  local lines = {}
+  for _, opt in ipairs(product.options or {}) do
+    local selectedId = selections and selections[opt.key]
+    local chosen = nil
+    for _, choice in ipairs(opt.choices or {}) do
+      if tonumber(choice.id) == tonumber(selectedId) then
+        chosen = choice.name
+        break
+      end
+    end
+    table.insert(lines, string.format('%s: %s', opt.label or opt.key, chosen or '(not selected)'))
+  end
+  return table.concat(lines, '\n')
+end
+
+local function optionChoiceButtonHeight(label, buttonWidth)
+  -- Prefer readable multiline labels for long weapon / multitool names.
+  local text = tostring(label or '')
+  local width = math.max(80, tonumber(buttonWidth) or 360)
+  local charsPerLine = math.max(12, math.floor((width - 16) / 7))
+  local lines = math.max(1, math.ceil(#text / charsPerLine))
+  local words = 0
+  for _ in text:gmatch('%S+') do
+    words = words + 1
+  end
+  if words >= 4 then
+    lines = math.max(lines, 2)
+  end
+  return math.min(72, math.max(36, 10 + lines * 16))
+end
+
+local function showOptionSelectWindow(title, prompt, choices, onPick)
+  destroyConfirm()
+  local ok, win = pcall(function()
+    return g_ui.createWidget('ZdechlakShopOptionWindow', rootWidget)
+  end)
+  if not ok or not win then
+    -- Fallback: still avoid horizontal GeneralBox truncation by using one tall button per row via sequential boxes.
+    showMessage('Shop UI error', 'Could not open option selection window.')
+    return
+  end
+  confirmWindow = win
+  pcall(function()
+    win:setText(title)
+  end)
+  if win.promptLabel then
+    win.promptLabel:setText(prompt)
+  end
+  local list = win.choicesList or win:getChildById('choicesList')
+  if not list then
+    destroyConfirm()
+    showMessage('Shop UI error', 'Option list widget missing.')
+    return
+  end
+  list:destroyChildren()
+  local listWidth = 360
+  pcall(function()
+    listWidth = math.max(200, list:getWidth() - 8)
+  end)
+  for _, choice in ipairs(choices) do
+    local label = tostring(choice.name or choice.id)
+    local btn = g_ui.createWidget('ZdechlakShopOptionChoice', list)
+    if not btn then
+      destroyConfirm()
+      showMessage('Shop UI error', 'Failed to create option button.')
+      return
+    end
+    btn:setId('choice_' .. tostring(choice.id))
+    btn.choiceId = tonumber(choice.id)
+    btn:setText(label)
+    pcall(function()
+      btn:setTextWrap(true)
+      btn:setTextAlign(AlignCenter)
+    end)
+    local h = optionChoiceButtonHeight(label, listWidth)
+    btn:setHeight(h)
+    pcall(function()
+      btn:setWidth(listWidth)
+    end)
+    local choiceCopy = choice
+    btn.onClick = function()
+      destroyConfirm()
+      if onPick then
+        onPick(choiceCopy)
+      end
+    end
+  end
+  shopLog('option window choices=' .. tostring(#choices) .. ' title=' .. tostring(title))
+end
+
+function cancelOptionSelect()
+  destroyConfirm()
+end
+
+local function collectRequiredOptions(product, done)
+  local options = product.options or {}
+  if #options == 0 then
+    done({})
+    return
+  end
+
+  local selections = {}
+  local index = 1
+
+  local function askNext()
+    if index > #options then
+      done(selections)
+      return
+    end
+    local opt = options[index]
+    index = index + 1
+    local choices = opt.choices or {}
+    if #choices == 0 then
+      showMessage('Unavailable option', 'Option "' .. tostring(opt.label or opt.key) .. '" has no valid choices. Purchase blocked.')
+      return
+    end
+
+    local title = 'Select ' .. tostring(opt.label or opt.key)
+    local prompt = 'Choose one option for ' .. tostring(product.name or 'offer') .. '.\nFull names are shown. No default is applied.'
+    showOptionSelectWindow(title, prompt, choices, function(choiceCopy)
+      selections[opt.key] = tonumber(choiceCopy.id)
+      askNext()
+    end)
+  end
+
+  askNext()
+end
+
+local function doPurchase(product, playerName, selections)
+  local idem = string.format('otc-%s-%s-%s', tostring(product.id), tostring(os.time()), tostring(math.random(100000, 999999)))
+  setStatus('Purchasing...', '#cccccc')
+  local body = {
+    offer_id = product.id,
+    player_name = playerName,
+    idempotency_key = idem,
+    shop_token = shopToken,
+    selections = selections or {},
+  }
+  withHttpTimeout(function()
+    postJson(apiUrl('purchase'), body, function(data, err)
+      if err or not data then
+        setStatus('Purchase failed: connection error', '#ff8080')
+        showMessage('Purchase failed', 'Connection error. If points were deducted, contact support with time of purchase.')
+        fetchBalance()
+        return
+      end
+      if data.ok == false then
+        local msg = (data.error and data.error.message) or 'Purchase failed'
+        if data.balance ~= nil then
+          balance = tonumber(data.balance)
+          setBalanceLabel()
+        else
+          fetchBalance()
+        end
+        setStatus('Purchase failed', '#ff8080')
+        showMessage('Purchase failed', msg)
+        return
+      end
+      if data.balance ~= nil then
+        balance = tonumber(data.balance)
+        setBalanceLabel()
+      else
+        fetchBalance()
+      end
+      setStatus('Purchase OK', '#8fdf8f')
+      -- Exact owner-approved success copy (no technical delivery details).
+      showMessage('Purchase complete', 'Purchase successful! Your items should be delivered shortly.')
+    end)
+  end)
+end
+
+function requestPurchase(product)
+  if not product then
+    return
+  end
+  if product.purchaseable_in_otc == false or (product.requires and product.requires.website_only) then
+    showMessage('Website only', 'This offer must be purchased on the website shop.')
+    openExternalUrl(WEBSITE_SHOP_URL)
+    return
+  end
+
+  ensureAuthenticated(function(ok)
+    if not ok then
+      return
+    end
+    local playerName = g_game.getCharacterName()
+    collectRequiredOptions(product, function(selections)
+      destroyConfirm()
+      local opts = optionChoicesText(product, selections)
+      local msg = 'Buy ' .. tostring(product.name or 'item') .. ' for ' .. tostring(product.price or '?') .. ' Zdechlak Coins?\nDeliver to: ' .. tostring(playerName) .. '\n\n' .. (opts ~= '' and (opts .. '\n') or '') .. 'Final price is always taken from the website.'
+      confirmWindow = displayGeneralBox('Confirm purchase', msg, {
+        {
+          text = 'Buy',
+          callback = function()
+            destroyConfirm()
+            doPurchase(product, playerName, selections)
+          end
+        },
+        { text = 'Cancel', callback = destroyConfirm },
+      })
+    end)
+  end)
+end
+
+function onCategoryButtonClick(button)
+  -- game_shop pattern: category Button @onClick (not TextList focus).
+  if selectingCategory then
+    return
+  end
+  if not button then
+    return
+  end
+  local parent = button:getParent()
+  local cid = tonumber(button.categoryId)
+  local vid = tonumber(button.vocationId)
+  if not cid and parent then
+    cid = tonumber(parent.categoryId)
+  end
+  if not vid and parent then
+    vid = tonumber(parent.vocationId)
+  end
+  if not cid then
+    setStatus('Invalid category button.', '#ff8080')
+    return
+  end
+
+  local wantExpand = equipmentExpanded
+  local wantVid = nil
+  if cid == EQUIPMENT_CATEGORY_ID then
+    wantExpand = true
+    wantVid = vid or tonumber(selectedVocationId) or 1
+  else
+    wantExpand = false
+    wantVid = nil
+  end
+
+  if tonumber(selectedCategoryId) == cid
+      and tonumber(selectedVocationId or -1) == tonumber(wantVid or -1)
+      and wantExpand == equipmentExpanded then
+    pcall(function()
+      button:setChecked(true)
+    end)
+    return
+  end
+
+  equipmentExpanded = wantExpand
+  rebuildCategoryWidgets()
+  if not selectCategory(cid, true, wantVid) then
+    setStatus('Could not select category.', '#ff8080')
+    return
+  end
+
+  local shown = 0
+  local productsWidget = productsList()
+  if productsWidget then
+    shown = productsWidget:getChildCount()
+  end
+  local cat = findCategoryById(cid)
+  local label = cat and cat.name or tostring(cid)
+  if cid == EQUIPMENT_CATEGORY_ID and selectedVocationId then
+    local children = type(cat.children) == 'table' and cat.children or {}
+    for _, child in ipairs(children) do
+      if tonumber(child.vocation_id) == selectedVocationId then
+        label = tostring(cat.name) .. ' / ' .. tostring(child.name)
+        break
+      end
+    end
+  end
+  setStatus('Showing ' .. tostring(shown) .. ' in ' .. tostring(label), '#8fdf8f')
+end
+
+function refresh()
+  if not ensureUi() then
+    return
+  end
+  -- Catalog is public and must load even when account auth/balance fails.
+  fetchCatalog(function(ok)
+    if not ok then
+      return
+    end
+    ensureAuthenticated(function(authOk)
+      if authOk then
+        fetchBalance()
+      end
+    end)
+  end)
+end
+
+function buyPoints()
+  -- Exact owner-confirmed purchase URL (API buy_points_url is normalized to this).
+  openExternalUrl(normalizeBuyPointsUrl(BUY_POINTS_URL))
+end
+
+function toggle()
+  if not ensureUi() then
+    return
+  end
+  if shopWindow:isVisible() then
+    hide()
+  else
+    show()
+  end
+end
+
+function show()
+  if not ensureUi() then
+    return
+  end
+  shopWindow:show()
+  shopWindow:raise()
+  shopWindow:focus()
+  setStatus('Connecting to shop...', '#cccccc')
+  refresh()
+end
+
+function hide()
+  if widgetAlive(shopWindow) then
+    shopWindow:hide()
+  end
+  destroyConfirm()
+end
+
+function init()
+  connect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd
+  })
+  shopButton = nil
+  g_logger.info('[zdechlak-shop] module loaded; waiting for Shop/Store button redirect')
+  if g_game.isOnline() then
+    onGameStart()
+  end
+end
+
+function terminate()
+  disconnect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd
+  })
+  hide()
+  destroyMsg()
+  if shopWindow then
+    shopWindow:destroy()
+    shopWindow = nil
+  end
+  shopButton = nil
+  clearAuth()
+end
+
+function onGameStart()
+  clearAuth()
+  balance = nil
+  if widgetAlive(shopWindow) then
+    setBalanceLabel()
+  end
+end
+
+function onGameEnd()
+  hide()
+  clearAuth()
+  clearProducts()
+  balance = nil
+end

@@ -1,0 +1,64 @@
+MainWindow
+  id: zdechlakBootUpdateWindow
+  !text: tr('ZDECHLAK')
+  // Outer size must leave room for MainWindow title chrome (~28px) plus body.
+  // Previous 440x230 collapsed to ~180px content and stacked labels under the bar.
+  size: 420 260
+  phantom: false
+  @onEscape: modules.client_zdechlak_boot.onCancel()
+
+  Panel
+    id: bodyPanel
+    anchors.fill: parent
+    margin-top: 6
+    margin-left: 18
+    margin-right: 18
+    margin-bottom: 10
+    phantom: true
+
+    Label
+      id: statusLabel
+      anchors.top: parent.top
+      anchors.left: parent.left
+      anchors.right: parent.right
+      height: 22
+      text-align: center
+      text-wrap: false
+      text-auto-resize: false
+      !text: tr('Checking for updates...')
+      color: #e8c56a
+      font: verdana-11px-rounded
+
+    Label
+      id: detailLabel
+      anchors.top: statusLabel.bottom
+      anchors.left: parent.left
+      anchors.right: parent.right
+      margin-top: 12
+      height: 22
+      text-align: center
+      text-wrap: false
+      text-auto-resize: false
+      !text: tr('')
+      color: #f0e6c8
+      font: verdana-11px-rounded
+
+    ProgressBar
+      id: progressBar
+      anchors.top: detailLabel.bottom
+      anchors.left: parent.left
+      anchors.right: parent.right
+      margin-top: 18
+      height: 18
+      background-color: #4444ff
+      percent: 0
+
+    Button
+      id: continueButton
+      !text: tr('Continue')
+      width: 110
+      height: 24
+      anchors.bottom: parent.bottom
+      anchors.horizontalCenter: parent.horizontalCenter
+      visible: false
+      @onClick: modules.client_zdechlak_boot.onContinue()

@@ -1,0 +1,361 @@
+-- Compact ZDECHLAK Boss Tracker for four custom bosses.
+-- Automatic detection uses Creature health reaching 0 (Creature.onDeath / onHealthPercentChange).
+-- Creature disappearance alone never starts the timer.
+
+local COOLDOWN_SECONDS = 20 * 60 * 60
+local STORAGE_FILE = '/settings/zdechlak_bosstracker.json'
+local DUPLICATE_WINDOW_SECONDS = 60
+
+local BOSS_NAMES = {
+  'Vorak the Hollow',
+  'Malgrath Soulreaper',
+  'Xalvor the Devourer',
+  'Nharzul the Eternal'
+}
+
+local trackerWindow = nil
+local trackerButton = nil
+local refreshEvent = nil
+local store = { servers = {} }
+local rowWidgets = {}
+local recentDeaths = {} -- [bossName] = unix ts of last accepted death
+
+local function logInfo(msg)
+  pcall(function()
+    g_logger.info('[zdechlak-bosstracker] ' .. tostring(msg))
+  end)
+end
+
+local function ensureSettingsDir()
+  if not g_resources.directoryExists('/settings') then
+    g_resources.makeDir('/settings')
+  end
+end
+
+local function loadStore()
+  store = { servers = {} }
+  if not g_resources.fileExists(STORAGE_FILE) then
+    return
+  end
+  local ok, data = pcall(function()
+    return json.decode(g_resources.readFileContents(STORAGE_FILE))
+  end)
+  if ok and type(data) == 'table' then
+    store = data
+    if type(store.servers) ~= 'table' then
+      store.servers = {}
+    end
+  else
+    store = { servers = {} }
+  end
+end
+
+local function saveStore()
+  ensureSettingsDir()
+  local ok, encoded = pcall(function()
+    return json.encode(store, 2)
+  end)
+  if not ok or type(encoded) ~= 'string' or #encoded > 8 * 1024 * 1024 then
+    return
+  end
+  pcall(function()
+    g_resources.writeFileContents(STORAGE_FILE, encoded)
+  end)
+end
+
+local function serverKey()
+  local world = ''
+  pcall(function()
+    world = tostring(g_game.getWorldName() or '')
+  end)
+  if world == '' then
+    world = 'ZDECHLAK'
+  end
+  local identity = 'default'
+  if type(G) == 'table' and type(G.server) == 'string' and G.server ~= '' then
+    identity = G.server
+    if type(Servers) == 'table' and type(Servers[G.server]) == 'string' then
+      identity = G.server .. '=' .. Servers[G.server]
+    end
+  elseif type(Server) == 'table' then
+    identity = tostring(Server.name or 'ZDECHLAK') .. '=' ..
+      tostring(Server.host or '') .. ':' .. tostring(Server.port or '')
+  end
+  return world .. '|' .. identity
+end
+
+local function characterName()
+  local name = ''
+  pcall(function()
+    name = tostring(g_game.getCharacterName() or '')
+  end)
+  if name == '' then
+    local player = g_game.getLocalPlayer()
+    if player then
+      pcall(function()
+        name = tostring(player:getName() or '')
+      end)
+    end
+  end
+  return name
+end
+
+local function getBossRecord(bossName)
+  local sk = serverKey()
+  local char = characterName()
+  if char == '' then
+    return nil
+  end
+  store.servers[sk] = store.servers[sk] or { characters = {} }
+  local server = store.servers[sk]
+  server.characters = server.characters or {}
+  server.characters[char] = server.characters[char] or { bosses = {} }
+  local charData = server.characters[char]
+  charData.bosses = charData.bosses or {}
+  if type(charData.bosses[bossName]) ~= 'table' then
+    charData.bosses[bossName] = { lastKill = nil }
+  end
+  return charData.bosses[bossName]
+end
+
+local function formatHMS(totalSeconds)
+  if totalSeconds < 0 then
+    totalSeconds = 0
+  end
+  totalSeconds = math.floor(totalSeconds)
+  local h = math.floor(totalSeconds / 3600)
+  local m = math.floor((totalSeconds % 3600) / 60)
+  local s = totalSeconds % 60
+  return string.format('%02d:%02d:%02d', h, m, s)
+end
+
+local function remainingSeconds(rec)
+  if not rec or not rec.lastKill or rec.lastKill <= 0 then
+    return 0
+  end
+  local left = COOLDOWN_SECONDS - (os.time() - rec.lastKill)
+  if left < 0 then
+    return 0
+  end
+  return left
+end
+
+local function isTrackedBossName(name)
+  if type(name) ~= 'string' then
+    return nil
+  end
+  for _, boss in ipairs(BOSS_NAMES) do
+    if name == boss then
+      return boss
+    end
+  end
+  return nil
+end
+
+local function recordDeath(bossName, source)
+  local nowTs = os.time()
+  if recentDeaths[bossName] and (nowTs - recentDeaths[bossName]) < DUPLICATE_WINDOW_SECONDS then
+    return false
+  end
+  local rec = getBossRecord(bossName)
+  if not rec then
+    return false
+  end
+  if rec.lastKill and (nowTs - rec.lastKill) < DUPLICATE_WINDOW_SECONDS then
+    return false
+  end
+  rec.lastKill = nowTs
+  recentDeaths[bossName] = nowTs
+  saveStore()
+  logInfo('death recorded: ' .. bossName .. ' via ' .. tostring(source))
+  refresh()
+  return true
+end
+
+local function clearRows()
+  for _, widget in pairs(rowWidgets) do
+    if widget and not widget:isDestroyed() then
+      widget:destroy()
+    end
+  end
+  rowWidgets = {}
+end
+
+local function ensureRows()
+  if not trackerWindow then
+    return
+  end
+  local list = trackerWindow.contentsPanel and trackerWindow.contentsPanel.bossList
+  if not list or #rowWidgets > 0 then
+    return
+  end
+  for _, name in ipairs(BOSS_NAMES) do
+    local row = g_ui.createWidget('BossTrackerCompactRow', list)
+    row.bossName = name
+    row.nameLabel:setText(name)
+    table.insert(rowWidgets, row)
+  end
+end
+
+function refresh()
+  if not trackerWindow then
+    return
+  end
+  ensureRows()
+  for _, row in ipairs(rowWidgets) do
+    local rec = getBossRecord(row.bossName)
+    local left = remainingSeconds(rec)
+    if left == 0 then
+      row.statusLabel:setText('READY')
+      row.statusLabel:setColor('#88ff88')
+    else
+      row.statusLabel:setText(formatHMS(left))
+      row.statusLabel:setColor('#ffaa55')
+    end
+  end
+end
+
+local function scheduleRefresh()
+  if refreshEvent then
+    removeEvent(refreshEvent)
+    refreshEvent = nil
+  end
+  refreshEvent = cycleEvent(function()
+    refresh()
+  end, 1000)
+end
+
+-- Reliable death: health percent reaches 0. OTCv8 Creature::setHealthPercent(0)
+-- also calls onDeath. Disappearance / range / floor changes do not set HP to 0.
+local function onCreatureHealthPercentChange(creature, healthPercent)
+  if not creature or not healthPercent or healthPercent > 0 then
+    return
+  end
+  local name = nil
+  pcall(function()
+    name = creature:getName()
+  end)
+  local boss = isTrackedBossName(name)
+  if boss then
+    recordDeath(boss, 'healthPercent<=0')
+  end
+end
+
+local function onCreatureDeath(creature)
+  if not creature then
+    return
+  end
+  local name = nil
+  pcall(function()
+    name = creature:getName()
+  end)
+  local boss = isTrackedBossName(name)
+  if boss then
+    recordDeath(boss, 'Creature.onDeath')
+  end
+end
+
+function toggle()
+  if not trackerWindow then
+    return
+  end
+  if trackerWindow:isVisible() then
+    trackerWindow:close()
+    if trackerButton then
+      trackerButton:setOn(false)
+    end
+  else
+    trackerWindow:open()
+    if trackerButton then
+      trackerButton:setOn(true)
+    end
+    refresh()
+  end
+end
+
+function onMiniWindowClose()
+  if trackerButton then
+    trackerButton:setOn(false)
+  end
+end
+
+local function onGameStart()
+  loadStore()
+  clearRows()
+  refresh()
+  scheduleRefresh()
+end
+
+local function onGameEnd()
+  saveStore()
+  if refreshEvent then
+    removeEvent(refreshEvent)
+    refreshEvent = nil
+  end
+end
+
+function init()
+  loadStore()
+  trackerButton = modules.client_topmenu.addRightGameToggleButton(
+    'zdechlakBossTrackerButton',
+    tr('Boss Tracker'),
+    '/images/topbuttons/quest_tracker',
+    toggle,
+    false,
+    8
+  )
+  trackerButton:setOn(false)
+
+  trackerWindow = g_ui.loadUI('game_zdechlak_bosstracker', modules.game_interface.getRightPanel())
+  trackerWindow:setup()
+  if trackerWindow:isVisible() then
+    trackerButton:setOn(true)
+  end
+
+  connect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd
+  })
+  connect(Creature, {
+    onHealthPercentChange = onCreatureHealthPercentChange,
+    onDeath = onCreatureDeath
+  })
+
+  if g_game.isOnline() then
+    onGameStart()
+  end
+  logInfo('init compact auto tracker (HP<=0 / onDeath only)')
+end
+
+function terminate()
+  disconnect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd
+  })
+  disconnect(Creature, {
+    onHealthPercentChange = onCreatureHealthPercentChange,
+    onDeath = onCreatureDeath
+  })
+  if refreshEvent then
+    removeEvent(refreshEvent)
+    refreshEvent = nil
+  end
+  saveStore()
+  clearRows()
+  if trackerWindow then
+    trackerWindow:destroy()
+    trackerWindow = nil
+  end
+  if trackerButton then
+    trackerButton:destroy()
+    trackerButton = nil
+  end
+end
+
+function getBossNames()
+  return BOSS_NAMES
+end
+
+function getCooldownSeconds()
+  return COOLDOWN_SECONDS
+end

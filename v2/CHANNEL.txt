@@ -1,4 +1,4 @@
 ZDECHLAK OTC updates/v2 — Stable tip
-Client: 1.0.21 (sequence 23)
+Client: 1.0.22 (sequence 24)
 Launcher: 1.0.13 (sequence 7)
-Feature: personal 4-boss tracker + independent session analytics (Stage 1, no artwork); CaveBot/Retro/shop/updater retained
+Feature: restore original Analyzers UI; compact auto boss tracker; login Token/branding/Discord cleanup

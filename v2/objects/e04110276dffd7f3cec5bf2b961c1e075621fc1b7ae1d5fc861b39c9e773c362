@@ -1,0 +1,84 @@
+-- ZDECHLAK login background with centered cover-style scaling (no stretch).
+local background
+local artwork
+local clientVersionLabel
+local ART_W = 1600
+local ART_H = 800
+local geometryEvent
+
+local function applyCover()
+  if not background or not artwork then
+    return
+  end
+  local pw = background:getWidth()
+  local ph = background:getHeight()
+  if pw <= 0 or ph <= 0 then
+    return
+  end
+  local scale = math.max(pw / ART_W, ph / ART_H)
+  local dw = math.ceil(ART_W * scale)
+  local dh = math.ceil(ART_H * scale)
+  artwork:setSize({ width = dw, height = dh })
+  artwork:setPosition({
+    x = math.floor((pw - dw) / 2),
+    y = math.floor((ph - dh) / 2)
+  })
+end
+
+function init()
+  background = g_ui.displayUI('background')
+  background:lower()
+  artwork = background:getChildById('artwork')
+  clientVersionLabel = background:getChildById('clientVersionLabel')
+  -- Public branding only (no internal rev / no Revoria author string).
+  clientVersionLabel:setText('ZDECHLAK v1.0\nzdechlak.pl\nOTClient')
+
+  applyCover()
+  geometryEvent = connect(background, { onGeometryChange = applyCover })
+  if rootWidget then
+    connect(rootWidget, { onGeometryChange = applyCover })
+  end
+
+  if not g_game.isOnline() then
+    addEvent(function() g_effects.fadeIn(clientVersionLabel, 1500) end)
+  end
+
+  connect(g_game, { onGameStart = hide })
+  connect(g_game, { onGameEnd = show })
+end
+
+function terminate()
+  disconnect(g_game, { onGameStart = hide })
+  disconnect(g_game, { onGameEnd = show })
+  if geometryEvent then
+    disconnect(geometryEvent)
+    geometryEvent = nil
+  end
+  if rootWidget then
+    disconnect(rootWidget, { onGeometryChange = applyCover })
+  end
+  g_effects.cancelFade(background:getChildById('clientVersionLabel'))
+  background:destroy()
+  Background = nil
+end
+
+function hide()
+  background:hide()
+end
+
+function show()
+  background:show()
+  addEvent(applyCover)
+end
+
+function hideVersionLabel()
+  background:getChildById('clientVersionLabel'):hide()
+end
+
+function setVersionText(text)
+  clientVersionLabel:setText(text)
+end
+
+function getBackground()
+  return background
+end

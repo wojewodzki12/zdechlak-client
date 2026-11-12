@@ -1,0 +1,4 @@
+-- Always-on original Analyzers UI (independent of CaveBot enable toggle).
+importStyle("/analyzers/analyzer.otui")
+dofile("/analyzers/items.lua")
+dofile("/analyzers/analyzer.lua")

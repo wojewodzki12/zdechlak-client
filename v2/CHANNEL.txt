@@ -1,4 +1,4 @@
 ZDECHLAK OTC updates/v2 — Stable tip
-Client: 1.0.16 (sequence 17)
+Client: 1.0.16 (sequence 18)
 Launcher: 1.0.12 (sequence 6)
-Feature: shop option multiline select + purchase success message
+Feature: right-panel banner restore + option multiline + purchase message

@@ -1,0 +1,321 @@
+-- In-client update gate for ZDECHLAK.
+-- Cryptographic install is done by native ZDECHLAK.exe (status-file IPC).
+-- This window only shows short English status + percent; never long paths.
+-- On update failure the login screen must NOT open.
+
+local POLL_MS = 250
+local MAX_WAIT_MS = 15 * 60 * 1000
+
+local bootWindow = nil
+local pollEvent = nil
+local startedAt = 0
+local finished = false
+local updateApplied = false
+local lastPhase = ''
+local gateFailed = false
+
+local function env(name)
+  local ok, value = pcall(function()
+    return os.getenv(name)
+  end)
+  if ok and value and value ~= '' then
+    return value
+  end
+  return nil
+end
+
+local function bootEnabled()
+  return env('ZDECHLAK_BOOT_UPDATE') == '1'
+end
+
+local function statusPath()
+  return env('ZDECHLAK_UPDATE_STATUS')
+end
+
+local function clampPercent(percent)
+  percent = tonumber(percent) or 0
+  if percent < 0 then
+    return 0
+  end
+  if percent > 100 then
+    return 100
+  end
+  return math.floor(percent + 0.5)
+end
+
+local function formatProgress(phase, message, percent)
+  phase = tostring(phase or '')
+  message = tostring(message or '')
+  percent = clampPercent(percent)
+
+  local status = 'Checking for updates...'
+  local detail = ''
+
+  if phase == 'checking' then
+    status = 'Checking for updates...'
+  elseif phase == 'downloading' then
+    status = 'Downloading update...'
+    detail = string.format('Downloading files: %d%%', percent)
+  elseif phase == 'verifying' then
+    status = 'Verifying files...'
+    detail = string.format('Verifying files: %d%%', percent)
+  elseif phase == 'installing' then
+    status = 'Installing update...'
+    detail = string.format('Installing update: %d%%', percent)
+  elseif phase == 'done' then
+    if message:find('Restart') or message:find('restart') then
+      status = 'Restarting client...'
+      detail = 'Update completed.'
+    else
+      status = 'Starting ZDECHLAK...'
+      detail = 'Update completed.'
+    end
+  elseif phase == 'error' then
+    status = 'Download failed.'
+    detail = 'Please try again.'
+  else
+    if message:find('Starting') or message:find('Uruchamianie') then
+      status = 'Starting ZDECHLAK...'
+    else
+      status = 'Checking for updates...'
+    end
+  end
+  return status, detail, percent
+end
+
+local function setContinueLabel(text)
+  if not bootWindow then
+    return
+  end
+  local body = bootWindow:getChildById('bodyPanel')
+  local b = (body and body:getChildById('continueButton')) or bootWindow:getChildById('continueButton')
+  if b then
+    b:setText(tostring(text or 'Continue'))
+  end
+end
+
+local function setUi(status, detail, percent, showContinue, continueLabel)
+  if not bootWindow then
+    return
+  end
+  local body = bootWindow:getChildById('bodyPanel')
+  local s = (body and body:getChildById('statusLabel')) or bootWindow:getChildById('statusLabel')
+  local d = (body and body:getChildById('detailLabel')) or bootWindow:getChildById('detailLabel')
+  local p = (body and body:getChildById('progressBar')) or bootWindow:getChildById('progressBar')
+  local b = (body and body:getChildById('continueButton')) or bootWindow:getChildById('continueButton')
+  if s then
+    s:setText(tostring(status or ''))
+  end
+  if d then
+    d:setText(tostring(detail or ''))
+  end
+  if p and percent ~= nil then
+    p:setPercent(clampPercent(percent))
+  end
+  if b then
+    b:setVisible(showContinue and true or false)
+  end
+  if continueLabel then
+    setContinueLabel(continueLabel)
+  end
+end
+
+local function hideLogin()
+  if EnterGame and EnterGame.hide then
+    pcall(EnterGame.hide)
+  end
+  if CharacterList and CharacterList.hide then
+    pcall(CharacterList.hide)
+  end
+end
+
+local function showLogin()
+  if bootWindow then
+    bootWindow:hide()
+  end
+  if EnterGame and EnterGame.show then
+    pcall(EnterGame.show)
+  end
+end
+
+local function readStatus()
+  local path = statusPath()
+  if not path then
+    return nil
+  end
+  local ok, content = pcall(function()
+    local f = io.open(path, 'rb')
+    if not f then
+      return nil
+    end
+    local data = f:read('*a')
+    f:close()
+    return data
+  end)
+  if not ok or not content or content == '' then
+    return nil
+  end
+  local st, doc = pcall(function()
+    return json.decode(content)
+  end)
+  if not st then
+    return nil
+  end
+  return doc
+end
+
+local function finishGate(allowLogin, restart)
+  if finished then
+    return
+  end
+  finished = true
+  if pollEvent then
+    removeEvent(pollEvent)
+    pollEvent = nil
+  end
+  if restart then
+    gateFailed = false
+    setUi('Restarting client...', 'Update completed.', 100, false)
+    scheduleEvent(function()
+      local marker = env('ZDECHLAK_RESTART_MARKER')
+      if marker then
+        pcall(function()
+          local f = io.open(marker, 'wb')
+          if f then
+            f:write('{"restart":true}\n')
+            f:close()
+          end
+        end)
+      end
+      g_app.exit()
+    end, 400)
+    return
+  end
+  if allowLogin then
+    gateFailed = false
+    showLogin()
+  else
+    -- Hard fail: keep gate up; do not open login / character list.
+    gateFailed = true
+    setUi('Download failed.', 'Update required. Retry or Exit.', 100, true, 'Retry')
+    hideLogin()
+  end
+end
+
+local function startPolling()
+  finished = false
+  gateFailed = false
+  updateApplied = false
+  lastPhase = ''
+  startedAt = os.time()
+  setContinueLabel('Continue')
+  setUi('Checking for updates...', '', 1, false)
+  hideLogin()
+  if pollEvent then
+    removeEvent(pollEvent)
+    pollEvent = nil
+  end
+  pollEvent = scheduleEvent(poll, POLL_MS)
+end
+
+function poll()
+  if finished then
+    return
+  end
+  if (os.time() - startedAt) * 1000 > MAX_WAIT_MS then
+    -- Timed out while updating: do NOT open login.
+    lastPhase = 'error'
+    finishGate(false, false)
+    return
+  end
+  local doc = readStatus()
+  if not doc then
+    setUi('Checking for updates...', '', 5, false)
+    pollEvent = scheduleEvent(poll, POLL_MS)
+    return
+  end
+  local phase = tostring(doc.phase or '')
+  local message = tostring(doc.message or '')
+  local percent = tonumber(doc.percent or 0) or 0
+  lastPhase = phase
+  if phase == 'error' then
+    local status, detail, pct = formatProgress(phase, message, percent)
+    setUi(status, detail, pct, true, 'Retry')
+    updateApplied = false
+    gateFailed = true
+    finished = true
+    hideLogin()
+    return
+  end
+  if phase == 'done' then
+    updateApplied = doc.updated == true
+    if updateApplied then
+      finishGate(false, true)
+    else
+      setUi('Starting ZDECHLAK...', 'Update completed.', 100, false)
+      scheduleEvent(function()
+        finishGate(true, false)
+      end, 350)
+    end
+    return
+  end
+  local status, detail, pct = formatProgress(phase, message, percent)
+  setUi(status, detail, pct, false)
+  pollEvent = scheduleEvent(poll, POLL_MS)
+end
+
+function onContinue()
+  -- On failure this button is Retry: never open login after a failed update.
+  if gateFailed or lastPhase == 'error' then
+    if bootWindow then
+      bootWindow:show()
+      bootWindow:raise()
+      bootWindow:focus()
+    end
+    startPolling()
+    return
+  end
+  if not gateFailed then
+    showLogin()
+  end
+end
+
+function onCancel()
+  -- Escape during failure exits; never bypass the update gate.
+  if gateFailed or lastPhase == 'error' then
+    g_app.exit()
+    return
+  end
+  if finished and not updateApplied and not gateFailed then
+    showLogin()
+  end
+end
+
+function init()
+  if not bootEnabled() then
+    return
+  end
+  startedAt = os.time()
+  hideLogin()
+  bootWindow = g_ui.displayUI('client_zdechlak_boot')
+  if bootWindow then
+    bootWindow:show()
+    bootWindow:raise()
+    bootWindow:focus()
+  end
+  setUi('Checking for updates...', '', 1, false)
+  scheduleEvent(hideLogin, 100)
+  scheduleEvent(hideLogin, 500)
+  pollEvent = scheduleEvent(poll, POLL_MS)
+end
+
+function terminate()
+  if pollEvent then
+    removeEvent(pollEvent)
+    pollEvent = nil
+  end
+  if bootWindow then
+    bootWindow:destroy()
+    bootWindow = nil
+  end
+end

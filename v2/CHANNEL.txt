@@ -1,3 +1,3 @@
 ZDECHLAK OTC updates/v2 — Stable tip
-Client: 1.0.24 / sequence 26
+Client: 1.0.25 / sequence 27
 Launcher: 1.0.14 / sequence 8

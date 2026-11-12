@@ -1,0 +1,45 @@
+UIWidget
+  id: background
+  anchors.fill: parent
+  focusable: false
+  background-color: black
+  image-source: /images/background
+  image-smooth: true
+  image-fixed-ratio: false
+  clipping: true
+
+  UIWidget
+    id: artwork
+    anchors.fill: parent
+    image-source: /images/background
+    image-smooth: true
+    image-fixed-ratio: false
+    image-auto-resize: false
+    focusable: false
+    phantom: true
+
+  UIWidget
+    id: brandLogo
+    anchors.left: parent.left
+    anchors.top: parent.top
+    margin-left: 48
+    margin-top: 36
+    size: 320 258
+    image-source: /images/ui/tibia-logo-artwork-top
+    image-smooth: true
+    image-fixed-ratio: true
+    focusable: false
+    phantom: true
+
+  UILabel
+    id: clientVersionLabel
+    background-color: #00000099
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    text-align: center
+    text-auto-resize: false
+    width: 220
+    height: 90
+    padding: 2
+    color: #ffffff
+    font: terminus-14px-bold

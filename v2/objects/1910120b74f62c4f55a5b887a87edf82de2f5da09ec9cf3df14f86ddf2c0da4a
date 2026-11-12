@@ -1,0 +1,10 @@
+Module
+  name: game_zdechlak_analytics
+  description: Independent client-side session analytics (no vBot)
+  author: ZDECHLAK
+  website: https://zdechlak.pl
+  sandboxed: true
+  scripts: [ game_zdechlak_analytics ]
+  dependencies: [ client_topmenu, game_interface, corelib ]
+  @onLoad: init()
+  @onUnload: terminate()

@@ -1,0 +1,511 @@
+-- ZDECHLAK personal Boss Tracker for exactly four custom bosses.
+-- 20-hour countdown is a personal reminder, not a server respawn guarantee.
+-- Kill detection: manual only (OTCv8 has no reliable personal kill attribution).
+
+local COOLDOWN_SECONDS = 20 * 60 * 60
+local STORAGE_FILE = '/settings/zdechlak_bosstracker.json'
+local HISTORY_LIMIT = 50
+local DUPLICATE_WINDOW_SECONDS = 30
+
+local BOSS_NAMES = {
+  'Vorak the Hollow',
+  'Malgrath Soulreaper',
+  'Xalvor the Devourer',
+  'Nharzul the Eternal'
+}
+
+local trackerWindow = nil
+local trackerButton = nil
+local refreshEvent = nil
+local store = { servers = {} }
+local rowWidgets = {}
+
+local function logInfo(msg)
+  pcall(function()
+    g_logger.info('[zdechlak-bosstracker] ' .. tostring(msg))
+  end)
+end
+
+local function ensureSettingsDir()
+  if not g_resources.directoryExists('/settings') then
+    g_resources.makeDir('/settings')
+  end
+end
+
+local function loadStore()
+  store = { servers = {} }
+  if not g_resources.fileExists(STORAGE_FILE) then
+    return
+  end
+  local ok, data = pcall(function()
+    return json.decode(g_resources.readFileContents(STORAGE_FILE))
+  end)
+  if ok and type(data) == 'table' then
+    store = data
+    if type(store.servers) ~= 'table' then
+      store.servers = {}
+    end
+  else
+    logInfo('failed to read store, starting empty')
+    store = { servers = {} }
+  end
+end
+
+local function saveStore()
+  ensureSettingsDir()
+  local ok, encoded = pcall(function()
+    return json.encode(store, 2)
+  end)
+  if not ok then
+    logInfo('encode failed: ' .. tostring(encoded))
+    return
+  end
+  if type(encoded) ~= 'string' or #encoded > 8 * 1024 * 1024 then
+    logInfo('refusing to write oversized store')
+    return
+  end
+  pcall(function()
+    g_resources.writeFileContents(STORAGE_FILE, encoded)
+  end)
+end
+
+local function serverKey()
+  -- Isolate by world + selected server identity (host:port:protocol when available).
+  local world = ''
+  pcall(function()
+    world = tostring(g_game.getWorldName() or '')
+  end)
+  if world == '' then
+    world = 'ZDECHLAK'
+  end
+  local identity = ''
+  if type(G) == 'table' and type(G.server) == 'string' and G.server ~= '' then
+    identity = G.server
+    if type(Servers) == 'table' and type(Servers[G.server]) == 'string' then
+      identity = G.server .. '=' .. Servers[G.server]
+    end
+  elseif type(Server) == 'table' then
+    identity = tostring(Server.name or 'ZDECHLAK') .. '=' ..
+      tostring(Server.host or '') .. ':' .. tostring(Server.port or '') .. ':' ..
+      tostring(Server.protocol or '')
+  else
+    identity = 'default'
+  end
+  return world .. '|' .. identity
+end
+
+local function characterName()
+  local name = ''
+  pcall(function()
+    name = tostring(g_game.getCharacterName() or '')
+  end)
+  if name == '' then
+    local player = g_game.getLocalPlayer()
+    if player then
+      pcall(function()
+        name = tostring(player:getName() or '')
+      end)
+    end
+  end
+  return name
+end
+
+local function getBossRecord(bossName)
+  local sk = serverKey()
+  local char = characterName()
+  if char == '' then
+    return nil
+  end
+  store.servers[sk] = store.servers[sk] or { characters = {} }
+  local server = store.servers[sk]
+  server.characters = server.characters or {}
+  server.characters[char] = server.characters[char] or { bosses = {} }
+  local charData = server.characters[char]
+  charData.bosses = charData.bosses or {}
+  if type(charData.bosses[bossName]) ~= 'table' then
+    charData.bosses[bossName] = {
+      lastKill = nil,
+      kills = 0,
+      history = {}
+    }
+  end
+  local rec = charData.bosses[bossName]
+  if type(rec.history) ~= 'table' then
+    rec.history = {}
+  end
+  if type(rec.kills) ~= 'number' then
+    rec.kills = 0
+  end
+  return rec
+end
+
+local function formatHMS(totalSeconds)
+  if totalSeconds < 0 then
+    totalSeconds = 0
+  end
+  totalSeconds = math.floor(totalSeconds)
+  local h = math.floor(totalSeconds / 3600)
+  local m = math.floor((totalSeconds % 3600) / 60)
+  local s = totalSeconds % 60
+  return string.format('%02d:%02d:%02d', h, m, s)
+end
+
+local function formatTimestamp(ts)
+  if not ts or ts <= 0 then
+    return 'never'
+  end
+  local ok, text = pcall(function()
+    return os.date('%Y-%m-%d %H:%M:%S', ts)
+  end)
+  if ok and text then
+    return text
+  end
+  return tostring(ts)
+end
+
+local function remainingSeconds(rec)
+  if not rec or not rec.lastKill or rec.lastKill <= 0 then
+    return 0
+  end
+  local elapsed = os.time() - rec.lastKill
+  local left = COOLDOWN_SECONDS - elapsed
+  if left < 0 then
+    return 0
+  end
+  return left
+end
+
+local function isReady(rec)
+  return remainingSeconds(rec) == 0
+end
+
+local function sortedBossNames()
+  local ready = {}
+  local cooling = {}
+  for _, name in ipairs(BOSS_NAMES) do
+    local rec = getBossRecord(name)
+    if isReady(rec) then
+      table.insert(ready, name)
+    else
+      table.insert(cooling, { name = name, left = remainingSeconds(rec) })
+    end
+  end
+  table.sort(cooling, function(a, b)
+    if a.left == b.left then
+      return a.name < b.name
+    end
+    return a.left < b.left
+  end)
+  local out = {}
+  for _, name in ipairs(ready) do
+    table.insert(out, name)
+  end
+  for _, item in ipairs(cooling) do
+    table.insert(out, item.name)
+  end
+  return out
+end
+
+local function appendHistory(rec, ts, source)
+  table.insert(rec.history, 1, {
+    ts = ts,
+    source = source or 'manual'
+  })
+  while #rec.history > HISTORY_LIMIT do
+    table.remove(rec.history)
+  end
+end
+
+local function recordKill(bossName, ts, source)
+  ts = tonumber(ts) or os.time()
+  ts = math.floor(ts)
+  local rec = getBossRecord(bossName)
+  if not rec then
+    return false, 'No character online'
+  end
+  if rec.lastKill and math.abs(ts - rec.lastKill) < DUPLICATE_WINDOW_SECONDS then
+    return false, 'Duplicate kill ignored'
+  end
+  rec.lastKill = ts
+  rec.kills = (rec.kills or 0) + 1
+  appendHistory(rec, ts, source or 'manual')
+  saveStore()
+  return true
+end
+
+local function setLastKill(bossName, ts)
+  ts = tonumber(ts)
+  if not ts or ts <= 0 then
+    return false, 'Invalid timestamp'
+  end
+  ts = math.floor(ts)
+  local rec = getBossRecord(bossName)
+  if not rec then
+    return false, 'No character online'
+  end
+  rec.lastKill = ts
+  -- Correction does not add a kill; note in history.
+  appendHistory(rec, ts, 'correction')
+  saveStore()
+  return true
+end
+
+local function resetBoss(bossName)
+  local rec = getBossRecord(bossName)
+  if not rec then
+    return false
+  end
+  rec.lastKill = nil
+  rec.kills = 0
+  rec.history = {}
+  saveStore()
+  return true
+end
+
+local function clearRows()
+  for _, widget in pairs(rowWidgets) do
+    if widget and not widget:isDestroyed() then
+      widget:destroy()
+    end
+  end
+  rowWidgets = {}
+end
+
+local function showHistory(bossName)
+  local rec = getBossRecord(bossName)
+  if not rec then
+    return
+  end
+  local lines = { bossName, '', 'Kill history (newest first):', '' }
+  if #rec.history == 0 then
+    table.insert(lines, '(empty)')
+  else
+    for i, entry in ipairs(rec.history) do
+      if i > 20 then
+        table.insert(lines, '...')
+        break
+      end
+      table.insert(lines, string.format('%s  [%s]', formatTimestamp(entry.ts), tostring(entry.source or 'manual')))
+    end
+  end
+  displayInfoBox('Boss History', table.concat(lines, '\n'))
+end
+
+local function askCorrectTime(bossName)
+  local rec = getBossRecord(bossName)
+  local current = (rec and rec.lastKill) or os.time()
+  modules.client_textedit.show(tostring(current), {
+    title = 'Correct last kill (Unix time)',
+    description = bossName .. '\nEnter Unix timestamp for last kill.',
+    width = 360,
+    validation = '^[0-9]{9,12}$'
+  }, function(text)
+    local ok, err = setLastKill(bossName, tonumber(text))
+    if not ok then
+      displayErrorBox('Boss Tracker', err or 'Failed')
+    end
+    refresh()
+  end)
+end
+
+local function askReset(bossName)
+  local box
+  local yes = function()
+    resetBoss(bossName)
+    if box then box:destroy() end
+    refresh()
+  end
+  local no = function()
+    if box then box:destroy() end
+  end
+  box = displayGeneralBox('Reset Boss Tracker',
+    'Reset all data for "' .. bossName .. '" on this character?\nThis cannot be undone.',
+    { { text = 'Reset', callback = yes }, { text = 'Cancel', callback = no } },
+    yes, no)
+end
+
+local function buildRow(parent, bossName)
+  local row = g_ui.createWidget('BossTrackerRow', parent)
+  row.bossName = bossName
+  row.nameLabel:setText(bossName)
+
+  row.killButton.onClick = function()
+    local ok, err = recordKill(bossName, os.time(), 'manual')
+    if not ok then
+      displayErrorBox('Boss Tracker', err or 'Failed')
+    end
+    refresh()
+  end
+  row.correctButton.onClick = function()
+    askCorrectTime(bossName)
+  end
+  row.historyButton.onClick = function()
+    showHistory(bossName)
+  end
+  row.resetButton.onClick = function()
+    askReset(bossName)
+  end
+
+  table.insert(rowWidgets, row)
+  return row
+end
+
+local function updateRow(row, bossName)
+  local rec = getBossRecord(bossName)
+  local left = remainingSeconds(rec)
+  local ready = left == 0
+  if ready then
+    row.statusLabel:setText('READY')
+    row.statusLabel:setColor('#88ff88')
+    row.countdownLabel:setText('00:00:00')
+  else
+    row.statusLabel:setText('CooldownING')
+    row.statusLabel:setColor('#ffaa55')
+    row.countdownLabel:setText(formatHMS(left))
+  end
+  row.lastKillLabel:setText('Last: ' .. formatTimestamp(rec and rec.lastKill))
+  row.killsLabel:setText('Kills: ' .. tostring((rec and rec.kills) or 0))
+end
+
+function refresh()
+  if not trackerWindow then
+    return
+  end
+  local char = characterName()
+  if trackerWindow.contentsPanel and trackerWindow.contentsPanel.charLabel then
+    trackerWindow.contentsPanel.charLabel:setText('Character: ' .. (char ~= '' and char or '(offline)'))
+  end
+
+  local list = trackerWindow.contentsPanel and trackerWindow.contentsPanel.bossList
+  if not list then
+    return
+  end
+
+  if #rowWidgets == 0 then
+    for _, name in ipairs(BOSS_NAMES) do
+      buildRow(list, name)
+    end
+  end
+
+  -- Reorder children: READY first
+  local order = sortedBossNames()
+  local byName = {}
+  for _, row in ipairs(rowWidgets) do
+    byName[row.bossName] = row
+  end
+  for i, name in ipairs(order) do
+    local row = byName[name]
+    if row then
+      list:moveChildToIndex(row, i)
+      updateRow(row, name)
+    end
+  end
+end
+
+local function scheduleRefresh()
+  if refreshEvent then
+    removeEvent(refreshEvent)
+    refreshEvent = nil
+  end
+  refreshEvent = cycleEvent(function()
+    refresh()
+  end, 1000)
+end
+
+function toggle()
+  if not trackerWindow then
+    return
+  end
+  if trackerWindow:isVisible() then
+    trackerWindow:close()
+    if trackerButton then
+      trackerButton:setOn(false)
+    end
+  else
+    trackerWindow:open()
+    if trackerButton then
+      trackerButton:setOn(true)
+    end
+    refresh()
+  end
+end
+
+function onMiniWindowClose()
+  if trackerButton then
+    trackerButton:setOn(false)
+  end
+end
+
+local function onGameStart()
+  loadStore()
+  clearRows()
+  refresh()
+  scheduleRefresh()
+end
+
+local function onGameEnd()
+  saveStore()
+  if refreshEvent then
+    removeEvent(refreshEvent)
+    refreshEvent = nil
+  end
+end
+
+function init()
+  loadStore()
+  trackerButton = modules.client_topmenu.addRightGameToggleButton(
+    'zdechlakBossTrackerButton',
+    tr('Boss Tracker'),
+    '/images/topbuttons/quest_tracker',
+    toggle,
+    false,
+    8
+  )
+  trackerButton:setOn(false)
+
+  trackerWindow = g_ui.loadUI('game_zdechlak_bosstracker', modules.game_interface.getRightPanel())
+  trackerWindow:setup()
+  if trackerWindow:isVisible() then
+    trackerButton:setOn(true)
+  end
+
+  connect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd
+  })
+
+  if g_game.isOnline() then
+    onGameStart()
+  end
+  logInfo('init (manual kill tracking only)')
+end
+
+function terminate()
+  disconnect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd
+  })
+  if refreshEvent then
+    removeEvent(refreshEvent)
+    refreshEvent = nil
+  end
+  saveStore()
+  clearRows()
+  if trackerWindow then
+    trackerWindow:destroy()
+    trackerWindow = nil
+  end
+  if trackerButton then
+    trackerButton:destroy()
+    trackerButton = nil
+  end
+end
+
+-- Test helpers (not UI)
+function getBossNames()
+  return BOSS_NAMES
+end
+
+function getCooldownSeconds()
+  return COOLDOWN_SECONDS
+end

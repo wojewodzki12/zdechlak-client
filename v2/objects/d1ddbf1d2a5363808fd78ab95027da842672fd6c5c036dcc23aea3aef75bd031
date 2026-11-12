@@ -1,0 +1,67 @@
+AnalyticsMetricRow < FlatPanel
+  height: 18
+  margin-bottom: 2
+
+  Label
+    id: nameLabel
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+    font: verdana-11px-monochrome
+    color: #bbbbbb
+    text-auto-resize: true
+
+  Label
+    id: valueLabel
+    anchors.right: parent.right
+    anchors.verticalCenter: parent.verticalCenter
+    font: verdana-11px-monochrome
+    color: #eeeeee
+    text-align: topright
+    text-auto-resize: true
+
+MiniWindow
+  id: analyticsWindow
+  !text: tr('Analytics')
+  height: 320
+  icon: /images/topbuttons/analyzers
+  @onClose: modules.game_zdechlak_analytics.onMiniWindowClose()
+  &save: true
+
+  MiniWindowContents
+    padding: 4
+    layout:
+      type: verticalBox
+
+    Label
+      id: noteLabel
+      !text: tr('Session metrics from client events. Independent of CaveBot.')
+      text-wrap: true
+      text-auto-resize: true
+      color: #888888
+      font: verdana-11px-monochrome
+      margin-bottom: 4
+
+    Panel
+      id: metricList
+      layout:
+        type: verticalBox
+        fit-children: true
+
+    HorizontalSeparator
+      margin-top: 6
+      margin-bottom: 6
+
+    Label
+      id: unsupportedLabel
+      text: ''
+      text-wrap: true
+      text-auto-resize: true
+      color: #aa8888
+      font: verdana-11px-monochrome
+      margin-bottom: 4
+
+    Button
+      id: resetButton
+      !text: tr('Reset Session')
+      height: 22
+      @onClick: modules.game_zdechlak_analytics.resetSession()

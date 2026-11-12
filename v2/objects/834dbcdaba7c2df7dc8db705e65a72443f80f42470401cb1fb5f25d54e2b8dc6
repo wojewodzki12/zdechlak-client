@@ -1,0 +1,322 @@
+-- ZDECHLAK independent session Analytics (no vBot / CaveBot dependency).
+-- Only metrics backed by real OTCv8 events are counted.
+-- Damage dealt / loot value: unavailable on protocol 860 (values not exposed to Lua).
+
+local analyticsWindow = nil
+local analyticsButton = nil
+local refreshEvent = nil
+local metricRows = {}
+
+local session = nil
+
+local METRIC_ORDER = {
+  { key = 'duration', label = 'Session duration' },
+  { key = 'expGained', label = 'Experience gained' },
+  { key = 'expPerHour', label = 'Experience / hour' },
+  { key = 'damageReceived', label = 'Damage received' },
+  { key = 'healing', label = 'Healing (HP gain)' },
+  { key = 'lootEvents', label = 'Loot messages' },
+  { key = 'damageDealt', label = 'Damage dealt' },
+  { key = 'lootValue', label = 'Loot value' }
+}
+
+local function logInfo(msg)
+  pcall(function()
+    g_logger.info('[zdechlak-analytics] ' .. tostring(msg))
+  end)
+end
+
+local function formatNumber(n)
+  n = math.floor(tonumber(n) or 0)
+  local sign = ''
+  if n < 0 then
+    sign = '-'
+    n = -n
+  end
+  local s = tostring(n)
+  local out = s:reverse():gsub('(%d%d%d)', '%1,'):reverse():gsub('^,', '')
+  return sign .. out
+end
+
+local function formatDuration(seconds)
+  seconds = math.max(0, math.floor(seconds or 0))
+  local h = math.floor(seconds / 3600)
+  local m = math.floor((seconds % 3600) / 60)
+  local s = seconds % 60
+  return string.format('%02d:%02d:%02d', h, m, s)
+end
+
+local function newSession()
+  local startExp = 0
+  local player = g_game.getLocalPlayer()
+  if player then
+    pcall(function()
+      startExp = tonumber(player:getExperience()) or 0
+    end)
+  end
+  session = {
+    startedAt = os.time(),
+    startExp = startExp,
+    lastExp = startExp,
+    expGained = 0,
+    damageReceived = 0,
+    healing = 0,
+    lootEvents = 0,
+    lastHealth = nil,
+    -- Explicitly unsupported on this client/protocol path:
+    damageDealtAvailable = false,
+    lootValueAvailable = false
+  }
+  if player then
+    pcall(function()
+      session.lastHealth = player:getHealth()
+    end)
+  end
+end
+
+local function ensureSession()
+  if not session then
+    newSession()
+  end
+  return session
+end
+
+local function extractLeadingNumber(text)
+  if type(text) ~= 'string' then
+    return nil
+  end
+  local n = text:match('(%d[%d,]*)')
+  if not n then
+    return nil
+  end
+  n = n:gsub(',', '')
+  return tonumber(n)
+end
+
+local function onExperienceChange(localPlayer, value)
+  local s = ensureSession()
+  value = tonumber(value) or 0
+  if s.lastExp and value >= s.lastExp then
+    s.expGained = s.expGained + (value - s.lastExp)
+  elseif value < (s.lastExp or 0) then
+    -- Death / reset: rebase without counting negative.
+    s.startExp = value
+  end
+  s.lastExp = value
+end
+
+local function onHealthChange(localPlayer, health, maxHealth)
+  local s = ensureSession()
+  health = tonumber(health) or 0
+  if s.lastHealth == nil then
+    s.lastHealth = health
+    return
+  end
+  local delta = health - s.lastHealth
+  if delta < 0 then
+    s.damageReceived = s.damageReceived + (-delta)
+  elseif delta > 0 then
+    -- Includes potions and natural regen; labeled as HP gain.
+    s.healing = s.healing + delta
+  end
+  s.lastHealth = health
+end
+
+local function onLootMessage(mode, text)
+  local s = ensureSession()
+  s.lootEvents = s.lootEvents + 1
+end
+
+-- Damage/Heal/Exp message modes: on protocol 860 the numeric values are consumed
+-- in C++ for animated text and are NOT passed to Lua. Do not fabricate totals
+-- from incomplete strings. Optional: count Exp text only if LocalPlayer path fails.
+
+local function onGameStart()
+  newSession()
+  refresh()
+end
+
+local function onGameEnd()
+  -- Keep last session visible until next login; do not wipe on disconnect
+  -- so the player can still read numbers. New session starts on next login.
+end
+
+function resetSession()
+  newSession()
+  refresh()
+end
+
+local function metricValue(key)
+  local s = ensureSession()
+  local elapsed = math.max(1, os.time() - (s.startedAt or os.time()))
+  if key == 'duration' then
+    return formatDuration(os.time() - (s.startedAt or os.time())), true
+  elseif key == 'expGained' then
+    return formatNumber(s.expGained), true
+  elseif key == 'expPerHour' then
+    local xph = (s.expGained / elapsed) * 3600
+    return formatNumber(xph), true
+  elseif key == 'damageReceived' then
+    return formatNumber(s.damageReceived), true
+  elseif key == 'healing' then
+    return formatNumber(s.healing), true
+  elseif key == 'lootEvents' then
+    return formatNumber(s.lootEvents), true
+  elseif key == 'damageDealt' then
+    return 'unavailable', false
+  elseif key == 'lootValue' then
+    return 'unavailable', false
+  end
+  return '-', false
+end
+
+local function ensureRows()
+  if not analyticsWindow then
+    return
+  end
+  local list = analyticsWindow.contentsPanel and analyticsWindow.contentsPanel.metricList
+  if not list then
+    return
+  end
+  if #metricRows > 0 then
+    return
+  end
+  for _, meta in ipairs(METRIC_ORDER) do
+    local row = g_ui.createWidget('AnalyticsMetricRow', list)
+    row.nameLabel:setText(meta.label)
+    row.metricKey = meta.key
+    table.insert(metricRows, row)
+  end
+end
+
+function refresh()
+  if not analyticsWindow then
+    return
+  end
+  ensureSession()
+  ensureRows()
+  for _, row in ipairs(metricRows) do
+    local value, available = metricValue(row.metricKey)
+    row.valueLabel:setText(value)
+    if available then
+      row.valueLabel:setColor('#eeeeee')
+      row.nameLabel:setColor('#bbbbbb')
+    else
+      row.valueLabel:setColor('#886666')
+      row.nameLabel:setColor('#886666')
+    end
+  end
+  local note = analyticsWindow.contentsPanel and analyticsWindow.contentsPanel.unsupportedLabel
+  if note then
+    note:setText('Unavailable: damage dealt (protocol values not exposed to Lua); loot value (no reliable prices). Healing includes regen.')
+  end
+end
+
+local function scheduleRefresh()
+  if refreshEvent then
+    removeEvent(refreshEvent)
+    refreshEvent = nil
+  end
+  refreshEvent = cycleEvent(function()
+    if analyticsWindow and analyticsWindow:isVisible() then
+      refresh()
+    end
+  end, 1000)
+end
+
+function toggle()
+  if not analyticsWindow then
+    return
+  end
+  if analyticsWindow:isVisible() then
+    analyticsWindow:close()
+    if analyticsButton then
+      analyticsButton:setOn(false)
+    end
+  else
+    analyticsWindow:open()
+    if analyticsButton then
+      analyticsButton:setOn(true)
+    end
+    refresh()
+  end
+end
+
+function onMiniWindowClose()
+  if analyticsButton then
+    analyticsButton:setOn(false)
+  end
+end
+
+function init()
+  analyticsButton = modules.client_topmenu.addRightGameToggleButton(
+    'zdechlakAnalyticsButton',
+    tr('Analytics'),
+    '/images/topbuttons/analyzers',
+    toggle,
+    false,
+    9
+  )
+  analyticsButton:setOn(false)
+
+  analyticsWindow = g_ui.loadUI('game_zdechlak_analytics', modules.game_interface.getRightPanel())
+  analyticsWindow:setup()
+  if analyticsWindow:isVisible() then
+    analyticsButton:setOn(true)
+  end
+
+  connect(LocalPlayer, {
+    onExperienceChange = onExperienceChange,
+    onHealthChange = onHealthChange
+  })
+  connect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd
+  })
+
+  -- Loot messages when the server sends MessageModes.Loot
+  if MessageModes and MessageModes.Loot and registerMessageMode then
+    registerMessageMode(MessageModes.Loot, onLootMessage)
+  end
+
+  scheduleRefresh()
+  if g_game.isOnline() then
+    onGameStart()
+  else
+    newSession()
+    refresh()
+  end
+  logInfo('init (independent analytics)')
+end
+
+function terminate()
+  disconnect(LocalPlayer, {
+    onExperienceChange = onExperienceChange,
+    onHealthChange = onHealthChange
+  })
+  disconnect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd
+  })
+  if MessageModes and MessageModes.Loot and unregisterMessageMode then
+    unregisterMessageMode(MessageModes.Loot, onLootMessage)
+  end
+  if refreshEvent then
+    removeEvent(refreshEvent)
+    refreshEvent = nil
+  end
+  for _, row in ipairs(metricRows) do
+    if row and not row:isDestroyed() then
+      row:destroy()
+    end
+  end
+  metricRows = {}
+  if analyticsWindow then
+    analyticsWindow:destroy()
+    analyticsWindow = nil
+  end
+  if analyticsButton then
+    analyticsButton:destroy()
+    analyticsButton = nil
+  end
+end

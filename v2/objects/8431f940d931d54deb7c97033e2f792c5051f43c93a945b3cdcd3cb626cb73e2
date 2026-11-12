@@ -1,0 +1,120 @@
+BossTrackerRow < FlatPanel
+  height: 96
+  margin-bottom: 4
+  padding: 4
+  background-color: #222222aa
+
+  Label
+    id: nameLabel
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.top: parent.top
+    font: verdana-11px-monochrome
+    color: #ffdd88
+    text-auto-resize: true
+
+  Label
+    id: statusLabel
+    anchors.left: parent.left
+    anchors.top: prev.bottom
+    margin-top: 2
+    font: verdana-11px-monochrome
+    color: #88ff88
+    text-auto-resize: true
+
+  Label
+    id: countdownLabel
+    anchors.left: prev.right
+    anchors.verticalCenter: prev.verticalCenter
+    margin-left: 10
+    font: verdana-11px-monochrome
+    color: #cccccc
+    text-auto-resize: true
+
+  Label
+    id: lastKillLabel
+    anchors.left: parent.left
+    anchors.top: statusLabel.bottom
+    margin-top: 2
+    font: verdana-11px-monochrome
+    color: #aaaaaa
+    text-auto-resize: true
+
+  Label
+    id: killsLabel
+    anchors.left: prev.right
+    anchors.verticalCenter: prev.verticalCenter
+    margin-left: 10
+    font: verdana-11px-monochrome
+    color: #aaaaaa
+    text-auto-resize: true
+
+  Button
+    id: killButton
+    !text: tr('Mark as Killed')
+    anchors.left: parent.left
+    anchors.bottom: parent.bottom
+    width: 96
+    height: 20
+
+  Button
+    id: correctButton
+    !text: tr('Correct Time')
+    anchors.left: prev.right
+    anchors.bottom: parent.bottom
+    margin-left: 3
+    width: 84
+    height: 20
+
+  Button
+    id: historyButton
+    !text: tr('History')
+    anchors.left: prev.right
+    anchors.bottom: parent.bottom
+    margin-left: 3
+    width: 56
+    height: 20
+
+  Button
+    id: resetButton
+    !text: tr('Reset')
+    anchors.left: prev.right
+    anchors.bottom: parent.bottom
+    margin-left: 3
+    width: 44
+    height: 20
+
+MiniWindow
+  id: bossTrackerWindow
+  !text: tr('Boss Tracker')
+  height: 440
+  icon: /images/topbuttons/quest_tracker
+  @onClose: modules.game_zdechlak_bosstracker.onMiniWindowClose()
+  &save: true
+
+  MiniWindowContents
+    padding: 4
+    layout:
+      type: verticalBox
+
+    Label
+      id: hintLabel
+      !text: tr('Personal 20h reminder. Not a server respawn guarantee.')
+      text-wrap: true
+      text-auto-resize: true
+      color: #888888
+      font: verdana-11px-monochrome
+      margin-bottom: 4
+
+    Label
+      id: charLabel
+      text: Character: -
+      color: #cccccc
+      font: verdana-11px-monochrome
+      margin-bottom: 4
+
+    Panel
+      id: bossList
+      layout:
+        type: verticalBox
+        fit-children: true

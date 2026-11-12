@@ -1,0 +1,10 @@
+Module
+  name: game_zdechlak_bosstracker
+  description: Personal ZDECHLAK four-boss tracker (20h reminder)
+  author: ZDECHLAK
+  website: https://zdechlak.pl
+  sandboxed: true
+  scripts: [ game_zdechlak_bosstracker ]
+  dependencies: [ client_topmenu, game_interface, corelib ]
+  @onLoad: init()
+  @onUnload: terminate()

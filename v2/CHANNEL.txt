@@ -1,4 +1,4 @@
 ZDECHLAK OTC updates/v2 — Stable tip
-Client: 1.0.16 (sequence 18)
+Client: 1.0.17 (sequence 19)
 Launcher: 1.0.12 (sequence 6)
-Feature: right-panel banner restore + option multiline + purchase message
+Feature: shopLog/widgetAlive Lua scope hotfix (categories/products render)

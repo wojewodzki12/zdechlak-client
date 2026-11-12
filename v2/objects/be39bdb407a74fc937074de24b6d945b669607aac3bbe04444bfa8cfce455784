@@ -1,0 +1,271 @@
+-- In-client update gate for ZDECHLAK.
+-- Visible progress lives in the real OTC window. Cryptographic install is done
+-- by the native ZDECHLAK.exe helper/launcher process (status file IPC).
+
+local POLL_MS = 250
+local MAX_WAIT_MS = 15 * 60 * 1000
+
+local bootWindow = nil
+local pollEvent = nil
+local startedAt = 0
+local finished = false
+local updateApplied = false
+
+local function env(name)
+  local ok, value = pcall(function()
+    return os.getenv(name)
+  end)
+  if ok and value and value ~= '' then
+    return value
+  end
+  return nil
+end
+
+local function bootEnabled()
+  return env('ZDECHLAK_BOOT_UPDATE') == '1'
+end
+
+local function statusPath()
+  return env('ZDECHLAK_UPDATE_STATUS')
+end
+
+local function truncateText(text, maxLen)
+  text = tostring(text or '')
+  maxLen = maxLen or 72
+  if #text <= maxLen then
+    return text
+  end
+  return text:sub(1, maxLen - 3) .. '...'
+end
+
+local function basenamePath(path)
+  path = tostring(path or '')
+  local name = path:match('([^/\\]+)$')
+  return name or path
+end
+
+-- Map launcher IPC noise into short status + optional detail (filename).
+local function formatProgress(phase, message)
+  phase = tostring(phase or '')
+  message = tostring(message or '')
+  local title = 'Updating ZDECHLAK...'
+  local status = 'Please wait...'
+  local detail = ''
+
+  if phase == 'checking' then
+    title = 'Checking for updates...'
+    status = 'Checking for updates...'
+  elseif phase == 'downloading' then
+    title = 'Downloading update...'
+    status = 'Downloading update...'
+    -- Extract "i/n: path" style detail from Polish/English launcher lines.
+    local idx, total, path = message:match('(%d+)%s*/%s*(%d+)%s*:%s*(.+)$')
+    if path then
+      detail = string.format('%s/%s  %s', idx, total, truncateText(basenamePath(path), 48))
+    elseif message ~= '' then
+      detail = truncateText(message, 70)
+    end
+  elseif phase == 'verifying' then
+    title = 'Verifying files...'
+    status = 'Verifying files...'
+    if message ~= '' and not message:find('Weryfikacja') and not message:find('Verif') then
+      detail = truncateText(message, 70)
+    end
+  elseif phase == 'installing' then
+    title = 'Installing update...'
+    status = 'Installing update...'
+  elseif phase == 'done' then
+    title = 'Starting ZDECHLAK...'
+    status = 'Starting ZDECHLAK...'
+  elseif phase == 'error' then
+    title = 'Update check failed'
+    status = 'Update check failed'
+    detail = truncateText(message, 90)
+  else
+    if message:find('Uruchamianie') or message:find('Starting') then
+      title = 'Starting ZDECHLAK...'
+      status = 'Starting ZDECHLAK...'
+    elseif message ~= '' then
+      status = truncateText(message, 48)
+      detail = truncateText(message, 70)
+    end
+  end
+  return title, status, detail
+end
+
+local function setUi(title, status, detail, percent, showContinue)
+  if not bootWindow then
+    return
+  end
+  local t = bootWindow:getChildById('titleLabel')
+  local s = bootWindow:getChildById('statusLabel')
+  local d = bootWindow:getChildById('detailLabel')
+  local p = bootWindow:getChildById('progressBar')
+  local b = bootWindow:getChildById('continueButton')
+  if t then t:setText(title or '') end
+  if s then s:setText(status or '') end
+  if d then d:setText(detail or '') end
+  if p and percent ~= nil then
+    p:setPercent(math.max(0, math.min(100, tonumber(percent) or 0)))
+  end
+  if b then
+    b:setVisible(showContinue and true or false)
+  end
+end
+
+local function hideLogin()
+  if EnterGame and EnterGame.hide then
+    pcall(EnterGame.hide)
+  end
+  if CharacterList and CharacterList.hide then
+    pcall(CharacterList.hide)
+  end
+end
+
+local function showLogin()
+  if bootWindow then
+    bootWindow:hide()
+  end
+  if EnterGame and EnterGame.show then
+    pcall(EnterGame.show)
+  end
+end
+
+local function readStatus()
+  local path = statusPath()
+  if not path then
+    return nil
+  end
+  local ok, content = pcall(function()
+    local f = io.open(path, 'rb')
+    if not f then
+      return nil
+    end
+    local data = f:read('*a')
+    f:close()
+    return data
+  end)
+  if not ok or not content or content == '' then
+    return nil
+  end
+  local st, doc = pcall(function()
+    return json.decode(content)
+  end)
+  if not st then
+    return nil
+  end
+  return doc
+end
+
+local function finishGate(allowLogin, restart)
+  if finished then
+    return
+  end
+  finished = true
+  if pollEvent then
+    removeEvent(pollEvent)
+    pollEvent = nil
+  end
+  if restart then
+    setUi('Starting ZDECHLAK...', 'Starting ZDECHLAK...', 'Restarting to apply the signed update...', 100, false)
+    scheduleEvent(function()
+      local marker = env('ZDECHLAK_RESTART_MARKER')
+      if marker then
+        pcall(function()
+          local f = io.open(marker, 'wb')
+          if f then
+            f:write('{"restart":true}\n')
+            f:close()
+          end
+        end)
+      end
+      g_app.exit()
+    end, 400)
+    return
+  end
+  if allowLogin then
+    showLogin()
+  else
+    setUi('Update error', 'Could not finish update check.', 'You can continue offline.', 100, true)
+  end
+end
+
+local function poll()
+  if finished then
+    return
+  end
+  if (os.time() - startedAt) * 1000 > MAX_WAIT_MS then
+    finishGate(true, false)
+    return
+  end
+  local doc = readStatus()
+  if not doc then
+    setUi('Checking for updates...', 'Checking for updates...', 'Waiting for updater...', 5, false)
+    pollEvent = scheduleEvent(poll, POLL_MS)
+    return
+  end
+  local phase = tostring(doc.phase or '')
+  local message = tostring(doc.message or '')
+  local percent = tonumber(doc.percent or 0) or 0
+  if phase == 'error' then
+    local title, status, detail = formatProgress(phase, message)
+    setUi(title, status, detail, percent, true)
+    updateApplied = false
+    finished = true
+    return
+  end
+  if phase == 'done' then
+    updateApplied = doc.updated == true
+    if updateApplied then
+      finishGate(false, true)
+    else
+      setUi('Starting ZDECHLAK...', 'Starting ZDECHLAK...', message ~= '' and truncateText(message, 70) or 'No update required.', 100, false)
+      scheduleEvent(function()
+        finishGate(true, false)
+      end, 350)
+    end
+    return
+  end
+  local title, status, detail = formatProgress(phase, message)
+  setUi(title, status, detail, percent, false)
+  pollEvent = scheduleEvent(poll, POLL_MS)
+end
+
+function onContinue()
+  showLogin()
+end
+
+function onCancel()
+  if finished and not updateApplied then
+    showLogin()
+  end
+end
+
+function init()
+  if not bootEnabled() then
+    return
+  end
+  startedAt = os.time()
+  hideLogin()
+  bootWindow = g_ui.displayUI('client_zdechlak_boot')
+  if bootWindow then
+    bootWindow:show()
+    bootWindow:raise()
+    bootWindow:focus()
+  end
+  setUi('Checking for updates...', 'Checking for updates...', 'Starting signed update check...', 1, false)
+  scheduleEvent(hideLogin, 100)
+  scheduleEvent(hideLogin, 500)
+  pollEvent = scheduleEvent(poll, POLL_MS)
+end
+
+function terminate()
+  if pollEvent then
+    removeEvent(pollEvent)
+    pollEvent = nil
+  end
+  if bootWindow then
+    bootWindow:destroy()
+    bootWindow = nil
+  end
+end

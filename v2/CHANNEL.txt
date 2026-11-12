@@ -1,4 +1,4 @@
 ZDECHLAK OTC updates/v2 — Stable tip
-Client: 1.0.17 (sequence 19)
+Client: 1.0.18 (sequence 20)
 Launcher: 1.0.12 (sequence 6)
-Feature: shopLog/widgetAlive Lua scope hotfix (categories/products render)
+Feature: CaveBot 1.3 only; Retro Theme default for fresh userdata; updater text clipping fix; shop preserved; no bundled vBot

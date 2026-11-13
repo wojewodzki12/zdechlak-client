@@ -1,0 +1,477 @@
+-- private variables
+local topMenu
+local fpsUpdateEvent = nil
+local statusUpdateEvent = nil
+
+local DISCORD_URL = 'https://discord.gg/xxNzTmEFfx'
+-- ASCII hyphen only: OTC verdana lacks an em-dash glyph (shows as broken letters).
+local DISCORD_PROMO = 'Join - free 20 coins'
+
+-- Other socials (B&W icons), kept apart from the Discord promo block.
+local OTHER_SOCIALS = {
+  { id = 'youtube', label = 'YouTube', url = 'https://www.youtube.com/@zdechlakpl', icon = '/images/ui/social_youtube' },
+  { id = 'instagram', label = 'Instagram', url = 'https://www.instagram.com/zdechlak.pl/', icon = '/images/ui/social_instagram' },
+  { id = 'tiktok', label = 'TikTok', url = 'https://www.tiktok.com/@zdechlak_pl', icon = '/images/ui/social_tiktok' },
+  { id = 'facebook', label = 'Facebook', url = 'https://www.facebook.com/zdechlakpl', icon = '/images/ui/social_facebook' },
+}
+
+local function bindClick(widget, callback)
+  if not widget then return end
+  widget.onMouseRelease = function(w, mousePos, mouseButton)
+    if w:containsPoint(mousePos) and mouseButton ~= MouseMidButton and mouseButton ~= MouseTouch then
+      callback()
+      return true
+    end
+  end
+  widget.onTouchRelease = widget.onMouseRelease
+end
+
+local function addLabeledNavButton(id, description, icon, callback, panel, front)
+  if topMenu.reverseButtons then
+    front = not front
+  end
+
+  local wrap = panel:getChildById(id)
+  if not wrap then
+    local ok, created = pcall(function()
+      return g_ui.createWidget('TopLabeledNavButton')
+    end)
+    if not ok or not created then
+      created = g_ui.createWidget('TopButton')
+      created:setIcon(resolvepath(icon, 3))
+      created:setTooltip(description)
+      bindClick(created, callback)
+      if front then panel:insertChild(1, created) else panel:addChild(created) end
+      created:setId(id)
+      return created
+    end
+    wrap = created
+    if front then
+      panel:insertChild(1, wrap)
+    else
+      panel:addChild(wrap)
+    end
+  end
+
+  wrap:setId(id)
+  wrap:setTooltip(description)
+  local iconBtn = wrap:getChildById('iconBtn') or wrap.iconBtn
+  local textLabel = wrap:getChildById('textLabel') or wrap.textLabel
+  if iconBtn then
+    iconBtn:setIcon(resolvepath(icon, 3))
+    iconBtn:setTooltip(description)
+    -- Ensure no text is drawn on the icon face.
+    pcall(function() iconBtn:setText('') end)
+  end
+  if textLabel then
+    textLabel:setText(description)
+    textLabel:setTooltip(description)
+  end
+  bindClick(wrap, callback)
+  return wrap
+end
+
+-- private functions
+local function addButton(id, description, icon, callback, panel, toggle, front, index)
+  if id == 'optionsButton' or id == 'logoutButton' then
+    local wrap = addLabeledNavButton(id, description, icon, callback, panel, front)
+    if wrap and not wrap.index and type(index) == 'number' then
+      wrap.index = index
+    end
+    return wrap
+  end
+
+  local class = toggle and 'TopToggleButton' or 'TopButton'
+  if topMenu.reverseButtons then
+    front = not front
+  end
+
+  local button = panel:getChildById(id)
+  if not button then
+    button = g_ui.createWidget(class)
+    if front then
+      panel:insertChild(1, button)
+    else
+      panel:addChild(button)
+    end
+  end
+  button:setId(id)
+  button:setTooltip(description)
+  button:setIcon(resolvepath(icon, 3))
+  bindClick(button, callback)
+  if not button.index and type(index) == 'number' then
+    button.index = index
+  end
+  -- Permanently remove Audio / Terminal from the top chrome (no space, no icon).
+  if id == 'audioButton' or id == 'terminalButton' then
+    button:hide()
+    local parent = button:getParent()
+    if parent then
+      pcall(function() parent:removeChild(button) end)
+    end
+  end
+  return button
+end
+
+local function addSocialIcon(panel, social)
+  local ok, btn = pcall(function()
+    return g_ui.createWidget('TopSocialButton', panel)
+  end)
+  if not ok or not btn then
+    ok, btn = pcall(function()
+      return g_ui.createWidget('UIButton', panel)
+    end)
+  end
+  if not ok or not btn then
+    return nil
+  end
+  btn:setId(social.id)
+  btn:setTooltip(social.label)
+  pcall(function()
+    btn:setImageSource(social.icon)
+  end)
+  bindClick(btn, function()
+    g_platform.openUrl(social.url)
+  end)
+  return btn
+end
+
+local function setupOfficialSocials()
+  if not topMenu then
+    return
+  end
+  local panel = topMenu:getChildById('socialButtonsPanel') or topMenu.socialButtonsPanel
+  if not panel then
+    return
+  end
+  pcall(function() panel:destroyChildren() end)
+
+  local centerPanel = topMenu:getChildById('centerSocialButtonsPanel') or topMenu.centerSocialButtonsPanel
+  if centerPanel then
+    pcall(function() centerPanel:destroyChildren() end)
+  end
+
+  -- Discord block stays left: icon + ASCII CTA (clickable together).
+  local okDiscord, discordWrap = pcall(function()
+    return g_ui.createWidget('TopDiscordPromo', panel)
+  end)
+  if not okDiscord or not discordWrap then
+    okDiscord, discordWrap = pcall(function()
+      return g_ui.createWidget('TopLabeledNavButton', panel)
+    end)
+  end
+  if okDiscord and discordWrap then
+    discordWrap:setId('discord')
+    discordWrap:setTooltip('Discord')
+    local iconBtn = discordWrap:getChildById('iconBtn')
+    local textLabel = discordWrap:getChildById('textLabel')
+    if iconBtn then
+      -- Prefer classic /images/ui/discord glyph next to the CTA; fall back to social_*.
+      local okIcon = pcall(function()
+        iconBtn:setImageSource('/images/ui/discord')
+      end)
+      if not okIcon then
+        pcall(function()
+          iconBtn:setImageSource('/images/ui/social_discord')
+        end)
+      end
+      pcall(function() iconBtn:setText('') end)
+      pcall(function()
+        iconBtn:setWidth(24)
+        iconBtn:setHeight(24)
+      end)
+    end
+    if textLabel then
+      textLabel:setText(DISCORD_PROMO)
+      textLabel:setColor('#e8c56a')
+      textLabel:setTooltip('Discord')
+    end
+    bindClick(discordWrap, function()
+      g_platform.openUrl(DISCORD_URL)
+    end)
+    topMenu.discord = discordWrap
+    topMenu.discordLabel = textLabel
+  else
+    addSocialIcon(panel, { id = 'discord', label = 'Discord', url = DISCORD_URL, icon = '/images/ui/discord' })
+  end
+
+  -- Other socials: centered in the top bar, lightly clear of the Discord CTA.
+  local socialHost = centerPanel or panel
+  if socialHost == panel then
+    local spacer = g_ui.createWidget('UIWidget', panel)
+    if spacer then
+      spacer:setId('socialSpacer')
+      spacer:setWidth(18)
+      spacer:setHeight(1)
+      spacer:setPhantom(true)
+    end
+  end
+
+  for _, social in ipairs(OTHER_SOCIALS) do
+    addSocialIcon(socialHost, social)
+  end
+end
+
+local function setLoginExtraButtonVisible(id, visible)
+  local btn = getButton(id)
+  if btn then
+    btn:setVisible(visible)
+  end
+end
+
+function hideLoginExtraButtons()
+  -- Login screen: no Audio / Terminal icons.
+  setLoginExtraButtonVisible('audioButton', false)
+  setLoginExtraButtonVisible('terminalButton', false)
+end
+
+function showLoginExtraButtons()
+  -- Still keep Audio/Terminal off the chrome; Options/Exit are enough.
+  setLoginExtraButtonVisible('audioButton', false)
+  setLoginExtraButtonVisible('terminalButton', false)
+end
+
+-- public functions
+function init()
+  connect(g_game, { onGameStart = online,
+                    onGameEnd = offline,
+                    onPingBack = updatePing })
+
+  topMenu = g_ui.createWidget('TopMenu', g_ui.getRootWidget())
+  pcall(setupOfficialSocials)
+  g_keyboard.bindKeyDown('Ctrl+Shift+T', toggle)
+
+  if g_game.isOnline() then
+    scheduleEvent(online, 10)
+  end
+
+  updateFps()
+  updateStatus()
+  -- options/terminal modules load later and recreate these buttons — hide repeatedly.
+  hideLoginExtraButtons()
+  scheduleEvent(hideLoginExtraButtons, 50)
+  scheduleEvent(hideLoginExtraButtons, 250)
+  scheduleEvent(hideLoginExtraButtons, 1000)
+end
+
+function terminate()
+  disconnect(g_game, { onGameStart = online,
+                       onGameEnd = offline,
+                       onPingBack = updatePing })
+  removeEvent(fpsUpdateEvent)
+  removeEvent(statusUpdateEvent)
+
+  g_keyboard.unbindKeyDown('Ctrl+Shift+T')
+  topMenu:destroy()
+end
+
+function online()
+  showLoginExtraButtons()
+  if topMenu.hideIngame then
+    hide()
+  else
+    modules.game_interface.getRootPanel():addAnchor(AnchorTop, 'topMenu', AnchorBottom)
+  end
+  if topMenu.onlineLabel then
+    topMenu.onlineLabel:hide()
+  end
+
+  showGameButtons()
+
+  if topMenu.pingLabel then
+    addEvent(function()
+      if modules.client_options.getOption('showPing') and (g_game.getFeature(GameClientPing) or g_game.getFeature(GameExtendedClientPing)) then
+        topMenu.pingLabel:show()
+      else
+        topMenu.pingLabel:hide()
+      end
+    end)
+  end
+end
+
+function offline()
+  hideLoginExtraButtons()
+  if topMenu.hideIngame then
+    show()
+  end
+  if topMenu.onlineLabel then
+    topMenu.onlineLabel:show()
+  end
+
+  hideGameButtons()
+  if topMenu.pingLabel then
+    topMenu.pingLabel:hide()
+  end
+  updateStatus()
+end
+
+function updateFps()
+  if not topMenu.fpsLabel then return end
+  fpsUpdateEvent = scheduleEvent(updateFps, 500)
+  text = 'FPS: ' .. g_app.getFps()
+  topMenu.fpsLabel:setText(text)
+end
+
+function updatePing(ping)
+  if not topMenu.pingLabel then return end
+  if g_proxy and g_proxy.getPing() > 0 then
+    ping = g_proxy.getPing()
+  end
+
+  local text = 'Ping: '
+  local color
+  if ping < 0 then
+    text = text .. "??"
+    color = 'yellow'
+  else
+    text = text .. ping .. ' ms'
+    if ping >= 500 then
+      color = 'red'
+    elseif ping >= 250 then
+      color = 'yellow'
+    else
+      color = 'green'
+    end
+  end
+  topMenu.pingLabel:setColor(color)
+  topMenu.pingLabel:setText(text)
+end
+
+function setPingVisible(enable)
+  if not topMenu.pingLabel then return end
+  topMenu.pingLabel:setVisible(enable)
+end
+
+function setFpsVisible(enable)
+  if not topMenu.fpsLabel then return end
+  topMenu.fpsLabel:setVisible(enable)
+end
+
+function addLeftButton(id, description, icon, callback, front, index)
+  return addButton(id, description, icon, callback, topMenu.leftButtonsPanel, false, front, index)
+end
+
+function addLeftToggleButton(id, description, icon, callback, front, index)
+  return addButton(id, description, icon, callback, topMenu.leftButtonsPanel, true, front, index)
+end
+
+function addRightButton(id, description, icon, callback, front, index)
+  return addButton(id, description, icon, callback, topMenu.rightButtonsPanel, false, front, index)
+end
+
+function addRightToggleButton(id, description, icon, callback, front, index)
+  return addButton(id, description, icon, callback, topMenu.rightButtonsPanel, true, front, index)
+end
+
+function addLeftGameButton(id, description, icon, callback, front, index)
+  local button = addButton(id, description, icon, callback, topMenu.leftGameButtonsPanel, false, front, index)
+  if modules.game_buttons then
+    modules.game_buttons.takeButton(button)
+  end
+  return button
+end
+
+function addLeftGameToggleButton(id, description, icon, callback, front, index)
+  local button = addButton(id, description, icon, callback, topMenu.leftGameButtonsPanel, true, front, index)
+  if modules.game_buttons then
+    modules.game_buttons.takeButton(button)
+  end
+  return button
+end
+
+function addRightGameButton(id, description, icon, callback, front, index)
+  local button = addButton(id, description, icon, callback, topMenu.rightGameButtonsPanel, false, front, index)
+  if modules.game_buttons then
+    modules.game_buttons.takeButton(button)
+  end
+  return button
+end
+
+function addRightGameToggleButton(id, description, icon, callback, front, index)
+  local button = addButton(id, description, icon, callback, topMenu.rightGameButtonsPanel, true, front, index)
+  if modules.game_buttons then
+    modules.game_buttons.takeButton(button)
+  end
+  return button
+end
+
+function showGameButtons()
+  topMenu.leftGameButtonsPanel:show()
+  topMenu.rightGameButtonsPanel:show()
+  if modules.game_buttons then
+    modules.game_buttons.takeButtons(topMenu.leftGameButtonsPanel:getChildren())
+    modules.game_buttons.takeButtons(topMenu.rightGameButtonsPanel:getChildren())
+  end
+end
+
+function hideGameButtons()
+  topMenu.leftGameButtonsPanel:hide()
+  topMenu.rightGameButtonsPanel:hide()
+end
+
+function getButton(id)
+  return topMenu:recursiveGetChildById(id)
+end
+
+function getTopMenu()
+  return topMenu
+end
+
+function toggle()
+  if not topMenu then
+    return
+  end
+
+  if topMenu:isVisible() then
+    hide()
+  else
+    show()
+  end
+end
+
+function hide()
+  topMenu:hide()
+  if not topMenu.hideIngame then
+    modules.game_interface.getRootPanel():addAnchor(AnchorTop, 'parent', AnchorTop)
+  end
+  if modules.game_stats then
+    modules.game_stats.show()
+  end
+end
+
+function show()
+  topMenu:show()
+  if not topMenu.hideIngame then
+    modules.game_interface.getRootPanel():addAnchor(AnchorTop, 'topMenu', AnchorBottom)
+  end
+  if modules.game_stats then
+    modules.game_stats.hide()
+  end
+end
+
+function updateStatus()
+  removeEvent(statusUpdateEvent)
+  if not Services or not Services.status or Services.status:len() < 4 then return end
+  if not topMenu.onlineLabel then return end
+  if g_game.isOnline() then return end
+  HTTP.postJSON(Services.status, {type="cacheinfo"}, function(data, err)
+    if err then
+      g_logger.warning("HTTP error for " .. Services.status .. ": " .. err)
+      statusUpdateEvent = scheduleEvent(updateStatus, 5000)
+      return
+    end
+    if topMenu.onlineLabel then
+      if data.online then
+        topMenu.onlineLabel:setText(data.online)
+      elseif data.playersonline then
+        topMenu.onlineLabel:setText(data.playersonline .. " players online")
+      end
+    end
+    if data.discord_link and topMenu.discord then
+      bindClick(topMenu.discord, function()
+        g_platform.openUrl(data.discord_link)
+      end)
+    end
+    statusUpdateEvent = scheduleEvent(updateStatus, 60000)
+  end)
+end

@@ -1,3 +1,4 @@
 ZDECHLAK OTC updates/v2 — Stable tip
-Client: 1.0.40 / sequence 42
+Client: 1.0.41 / sequence 43
 Launcher: 1.0.15 / sequence 9
+Primary mirror: https://s1.zdechlak.pl:9443/updates/v2

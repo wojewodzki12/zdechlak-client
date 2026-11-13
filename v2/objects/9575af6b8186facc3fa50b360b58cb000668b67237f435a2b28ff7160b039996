@@ -1,0 +1,130 @@
+-- ZDECHLAK login background.
+-- background.png must be a COMPLETE PNG and within GL max texture size (use <=1920).
+-- A truncated 2560x1440 tlo.png previously loaded as a blank texture.
+local background
+local artwork
+local brandLogo
+local clientVersionLabel
+
+local function resolveClientVersionText()
+  -- Exact tip version from signed release metadata (not the generic APP_VERSION).
+  local version, sequence
+  local ok, info = pcall(function()
+    if not g_resources.fileExists('/build-info.json') then
+      return nil
+    end
+    return json.decode(g_resources.readFileContents('/build-info.json'))
+  end)
+  if ok and type(info) == 'table' then
+    if type(info.version) == 'string' and info.version ~= '' then
+      version = info.version
+    end
+    if info.sequence ~= nil then
+      sequence = tonumber(info.sequence) or info.sequence
+    end
+  end
+  if version then
+    if sequence ~= nil then
+      return string.format('ZDECHLAK v%s\nseq %s\nzdechlak.pl', version, tostring(sequence))
+    end
+    return string.format('ZDECHLAK v%s\nzdechlak.pl\nOTClient', version)
+  end
+  return 'ZDECHLAK v1.0\nzdechlak.pl\nOTClient'
+end
+
+local function applyBrandLogo()
+  if not brandLogo then
+    return
+  end
+  local ok = pcall(function()
+    brandLogo:setImageSource('/images/ui/tibia-logo-artwork-top')
+  end)
+  if not ok then
+    pcall(function()
+      brandLogo:setImageSource('/modules/client_background/tibia-logo-artwork-top')
+    end)
+  end
+  -- Keep off the screen edge: left/top inset, scaled artwork.
+  pcall(function()
+    brandLogo:setMarginLeft(48)
+    brandLogo:setMarginTop(36)
+    brandLogo:setWidth(240)
+    brandLogo:setHeight(194)
+    brandLogo:raise()
+  end)
+end
+
+local function applyArtwork()
+  if not artwork then
+    return
+  end
+  -- Prefer packaged /images/background (layout-aware). Fallback path kept for older trees.
+  local ok = pcall(function()
+    artwork:setImageSource('/images/background')
+  end)
+  if not ok then
+    pcall(function()
+      artwork:setImageSource('/modules/client_background/tlo')
+    end)
+  end
+  pcall(function()
+    artwork:fill('parent')
+  end)
+  -- Also paint the root widget so a black frame never shows if child fails.
+  if background then
+    pcall(function()
+      background:setImageSource('/images/background')
+    end)
+  end
+  applyBrandLogo()
+end
+
+function init()
+  background = g_ui.displayUI('background')
+  background:lower()
+  artwork = background:getChildById('artwork')
+  brandLogo = background:getChildById('brandLogo')
+  clientVersionLabel = background:getChildById('clientVersionLabel')
+  clientVersionLabel:setText(resolveClientVersionText())
+
+  applyArtwork()
+  -- Re-apply after first layout pass (geometry ready).
+  addEvent(applyArtwork)
+  scheduleEvent(applyArtwork, 50)
+
+  if not g_game.isOnline() then
+    addEvent(function() g_effects.fadeIn(clientVersionLabel, 1500) end)
+  end
+
+  connect(g_game, { onGameStart = hide })
+  connect(g_game, { onGameEnd = show })
+end
+
+function terminate()
+  disconnect(g_game, { onGameStart = hide })
+  disconnect(g_game, { onGameEnd = show })
+  g_effects.cancelFade(background:getChildById('clientVersionLabel'))
+  background:destroy()
+  Background = nil
+end
+
+function hide()
+  background:hide()
+end
+
+function show()
+  background:show()
+  applyArtwork()
+end
+
+function hideVersionLabel()
+  background:getChildById('clientVersionLabel'):hide()
+end
+
+function setVersionText(text)
+  clientVersionLabel:setText(text)
+end
+
+function getBackground()
+  return background
+end

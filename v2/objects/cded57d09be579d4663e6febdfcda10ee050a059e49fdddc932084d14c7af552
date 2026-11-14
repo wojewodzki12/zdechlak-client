@@ -1,0 +1,272 @@
+-- ZDECHLAK Pass strip inside the customizable top status bar (game_topbar).
+local WINDOW = 5
+local SETTINGS_NODE = 'zdechlak-passbar'
+local passStrip = nil
+local slotWidgets = {}
+local currentIndex = 1 -- 1..PassMissionCount; PassMissionCount+1 = all completed
+local attachedTopBar = nil
+
+local function settings()
+  local node = g_settings.getNode(SETTINGS_NODE)
+  if not node then
+    node = {}
+  end
+  return node
+end
+
+local function saveSettings()
+  local node = settings()
+  node.current = currentIndex
+  g_settings.setNode(SETTINGS_NODE, node)
+end
+
+local function loadSettings()
+  local node = settings()
+  local cur = tonumber(node.current)
+  if cur and cur >= 1 and cur <= (PassMissionCount + 1) then
+    currentIndex = cur
+  else
+    currentIndex = 1
+  end
+end
+
+local function mission(index)
+  return PassMissions[index]
+end
+
+local function windowStart()
+  if currentIndex > PassMissionCount then
+    return math.max(1, PassMissionCount - WINDOW + 1)
+  end
+  local start = currentIndex - 2
+  if start < 1 then
+    start = 1
+  end
+  if start + WINDOW - 1 > PassMissionCount then
+    start = math.max(1, PassMissionCount - WINDOW + 1)
+  end
+  return start
+end
+
+local function statusFor(index)
+  if currentIndex > PassMissionCount then
+    return 'completed'
+  end
+  if index < currentIndex then
+    return 'completed'
+  end
+  if index == currentIndex then
+    return 'active'
+  end
+  return 'locked'
+end
+
+local function currentText()
+  if currentIndex > PassMissionCount then
+    local last = mission(PassMissionCount)
+    if last then
+      return string.format('#%d %s — Completed', PassMissionCount, last.name)
+    end
+    return 'Zdechlak Pass — Completed'
+  end
+  local m = mission(currentIndex)
+  if not m then
+    return 'Zdechlak Pass'
+  end
+  return string.format('#%d %s — %s', currentIndex, m.name, m.objective)
+end
+
+local function paintSlot(widget, index)
+  local m = mission(index)
+  local item = widget:getChildById('item')
+  local badge = widget:getChildById('badge')
+  if not m then
+    if item then item:setItemId(0) end
+    if badge then badge:setText('') end
+    widget:setTooltip('')
+    widget:setBorderWidth(0)
+    return
+  end
+  if item then
+    item:setItemId(m.icon or 2157)
+  end
+  if badge then
+    badge:setText(tostring(index))
+  end
+  local st = statusFor(index)
+  if st == 'active' then
+    widget:setBorderWidth(2)
+    widget:setBorderColor('#f0c040')
+  elseif st == 'completed' then
+    widget:setBorderWidth(1)
+    widget:setBorderColor('#40c070')
+  else
+    widget:setBorderWidth(1)
+    widget:setBorderColor('#505050')
+  end
+  local tip = string.format('#%d %s\n%s\nReward: %s', index, m.name, m.objective, m.rewardText or '-')
+  if st == 'completed' then
+    tip = tip .. '\n(Completed)'
+  elseif st == 'active' then
+    tip = tip .. '\n(Current)'
+  end
+  widget:setTooltip(tip)
+end
+
+local function refresh()
+  if not passStrip then
+    return
+  end
+  local start = windowStart()
+  for i = 1, WINDOW do
+    if slotWidgets[i] then
+      paintSlot(slotWidgets[i], start + i - 1)
+    end
+  end
+  local label = passStrip:getChildById('currentLabel')
+  if label then
+    label:setText(currentText())
+  end
+  passStrip:show()
+end
+
+local function setCurrent(index, persist)
+  index = math.max(1, math.min(PassMissionCount + 1, tonumber(index) or 1))
+  currentIndex = index
+  if persist ~= false then
+    saveSettings()
+  end
+  refresh()
+end
+
+local function onTextMessage(mode, text)
+  if type(text) ~= 'string' then
+    return
+  end
+  local n = text:match('[Zz]dechlak [Pp]ass #(%d+).-[Cc]ompleted')
+  if not n then
+    n = text:match('[Zz]dechlak [Pp]ass #(%d+)')
+    if n and not text:lower():find('completed', 1, true) then
+      local idx = tonumber(n)
+      if idx and idx >= currentIndex and idx <= PassMissionCount then
+        setCurrent(idx)
+      end
+      return
+    end
+  end
+  if n then
+    local idx = tonumber(n)
+    if idx and idx >= currentIndex then
+      setCurrent(idx + 1)
+    end
+  end
+end
+
+local function buildSlots(row)
+  slotWidgets = {}
+  if not row then
+    return
+  end
+  row:destroyChildren()
+  for i = 1, WINDOW do
+    local slot = g_ui.createWidget('PassSlot', row)
+    slot:setId('passSlot' .. i)
+    slotWidgets[i] = slot
+  end
+end
+
+-- Called from game_topbar after the customizable top status bar is created.
+function attachToTopBar(topBar)
+  if not topBar then
+    return false
+  end
+  if not PassMissions or not PassMissionCount then
+    dofile('pass_missions')
+  end
+  loadSettings()
+
+  passStrip = topBar:getChildById('passStrip')
+  if not passStrip then
+    -- Style may not be in topbar.otui yet — create and insert as first child.
+    g_ui.importStyle('game_zdechlak_passbar')
+    passStrip = g_ui.createWidget('PassStrip', topBar)
+    pcall(function()
+      topBar:moveChildToIndex(passStrip, 1)
+    end)
+  end
+
+  attachedTopBar = topBar
+  local row = passStrip:getChildById('slotsRow')
+  if not row or row:getChildCount() < WINDOW then
+    buildSlots(row or passStrip)
+  else
+    slotWidgets = {}
+    for i = 1, WINDOW do
+      slotWidgets[i] = row:getChildById('passSlot' .. i) or row:getChildByIndex(i)
+    end
+    if #slotWidgets < WINDOW then
+      buildSlots(row)
+    end
+  end
+
+  refresh()
+  return true
+end
+
+function detach()
+  passStrip = nil
+  slotWidgets = {}
+  attachedTopBar = nil
+end
+
+local function onGameStart()
+  loadSettings()
+  -- Prefer attaching via topbar refresh; fallback if topbar already up.
+  addEvent(function()
+    if modules.game_topbar and modules.game_topbar.getTopBarWidget then
+      local tb = modules.game_topbar.getTopBarWidget()
+      if tb then
+        attachToTopBar(tb)
+      end
+    end
+  end)
+end
+
+local function onGameEnd()
+  if passStrip then
+    passStrip:hide()
+  end
+end
+
+function init()
+  g_ui.importStyle('game_zdechlak_passbar')
+  if not PassMissions or not PassMissionCount then
+    dofile('pass_missions')
+  end
+  loadSettings()
+  connect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd,
+    onTextMessage = onTextMessage
+  })
+  if g_game.isOnline() then
+    onGameStart()
+  end
+end
+
+function terminate()
+  disconnect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd,
+    onTextMessage = onTextMessage
+  })
+  detach()
+end
+
+function PassBar_setCurrent(index)
+  setCurrent(index)
+end
+
+function PassBar_getCurrent()
+  return currentIndex
+end

@@ -1,0 +1,344 @@
+-- ZDECHLAK Pass bar - always visible on the game map (independent of top status bar).
+-- Layout: [cur-2][cur-1][CURRENT][cur+1][cur+2]
+-- Colors: earlier=green, middle=highlight, later=grey. ASCII only.
+
+local WINDOW = 5
+local MID = 3
+local SETTINGS_NODE = 'zdechlak-passbar'
+local passBar = nil
+local slotWidgets = {}
+local currentIndex = 1
+local retryEvent = nil
+
+local function log(msg)
+  pcall(function()
+    g_logger.info('[zdechlak-passbar] ' .. tostring(msg))
+  end)
+end
+
+local function settings()
+  local node = g_settings.getNode(SETTINGS_NODE)
+  if not node then
+    node = {}
+  end
+  return node
+end
+
+local function saveSettings()
+  local node = settings()
+  node.current = currentIndex
+  g_settings.setNode(SETTINGS_NODE, node)
+end
+
+local function loadSettings()
+  local node = settings()
+  local cur = tonumber(node.current)
+  if cur and cur >= 1 and cur <= (PassMissionCount + 1) then
+    currentIndex = cur
+  else
+    currentIndex = 1
+  end
+end
+
+local function mission(index)
+  return PassMissions[index]
+end
+
+local function focusIndex()
+  if currentIndex > PassMissionCount then
+    return PassMissionCount
+  end
+  return currentIndex
+end
+
+local function missionForSlot(slotPos)
+  return focusIndex() + (slotPos - MID)
+end
+
+local function statusFor(index)
+  if not index or index < 1 or index > PassMissionCount then
+    return 'empty'
+  end
+  if currentIndex > PassMissionCount then
+    return 'completed'
+  end
+  if index < currentIndex then
+    return 'completed'
+  end
+  if index == currentIndex then
+    return 'active'
+  end
+  return 'locked'
+end
+
+local function ascii(text)
+  if type(text) ~= 'string' then
+    return ''
+  end
+  return text:gsub('[\128-\255]', '')
+end
+
+local function currentText()
+  if currentIndex > PassMissionCount then
+    local last = mission(PassMissionCount)
+    if last then
+      return string.format('#%03d %s - Completed', PassMissionCount, ascii(last.name))
+    end
+    return 'Zdechlak Pass - Completed'
+  end
+  local m = mission(currentIndex)
+  if not m then
+    return 'Zdechlak Pass'
+  end
+  return string.format('#%03d %s - %s', currentIndex, ascii(m.name), ascii(m.objective))
+end
+
+local function paintSlot(widget, index)
+  local item = widget:getChildById('item')
+  local badge = widget:getChildById('badge')
+  local st = statusFor(index)
+  local m = (index and index >= 1 and index <= PassMissionCount) and mission(index) or nil
+
+  if st == 'empty' or not m then
+    if item then item:setItemId(0) end
+    if badge then badge:setText('') end
+    widget:setTooltip('')
+    widget:setBorderWidth(1)
+    widget:setBorderColor('#303030')
+    widget:setOpacity(0.35)
+    return
+  end
+
+  widget:setOpacity(1.0)
+  if item then
+    item:setItemId(m.icon or 2157)
+  end
+  if badge then
+    badge:setText(string.format('%03d', index))
+  end
+
+  if st == 'active' then
+    widget:setBorderWidth(2)
+    widget:setBorderColor('#f0c040')
+  elseif st == 'completed' then
+    widget:setBorderWidth(2)
+    widget:setBorderColor('#40c070')
+  else
+    widget:setBorderWidth(1)
+    widget:setBorderColor('#707070')
+    widget:setOpacity(0.55)
+  end
+
+  local tip = string.format('#%03d %s\n%s\nReward: %s', index, ascii(m.name), ascii(m.objective), ascii(m.rewardText or '-'))
+  if st == 'completed' then
+    tip = tip .. '\n(Completed)'
+  elseif st == 'active' then
+    tip = tip .. '\n(Current)'
+  else
+    tip = tip .. '\n(Locked)'
+  end
+  widget:setTooltip(tip)
+end
+
+local function refresh()
+  if not passBar then
+    return
+  end
+  for i = 1, WINDOW do
+    if slotWidgets[i] then
+      paintSlot(slotWidgets[i], missionForSlot(i))
+    end
+  end
+  local label = passBar:getChildById('currentLabel')
+  if label then
+    label:setText(currentText())
+  end
+  passBar:show()
+  passBar:raise()
+end
+
+local function setCurrent(index, persist)
+  index = math.max(1, math.min(PassMissionCount + 1, tonumber(index) or 1))
+  currentIndex = index
+  if persist ~= false then
+    saveSettings()
+  end
+  refresh()
+end
+
+local function onTextMessage(mode, text)
+  if type(text) ~= 'string' then
+    return
+  end
+  local n = text:match('[Zz]dechlak [Pp]ass #(%d+).-[Cc]ompleted')
+  if not n then
+    n = text:match('[Zz]dechlak [Pp]ass #(%d+)')
+    if n and not text:lower():find('completed', 1, true) then
+      local idx = tonumber(n)
+      if idx and idx >= currentIndex and idx <= PassMissionCount then
+        setCurrent(idx)
+      end
+      return
+    end
+  end
+  if n then
+    local idx = tonumber(n)
+    if idx and idx >= currentIndex then
+      setCurrent(idx + 1)
+    end
+  end
+end
+
+local function buildSlots(row)
+  slotWidgets = {}
+  if not row then
+    return
+  end
+  row:destroyChildren()
+  for i = 1, WINDOW do
+    local slot = g_ui.createWidget('PassSlot', row)
+    slot:setId('passSlot' .. i)
+    slotWidgets[i] = slot
+  end
+end
+
+local function hostPanel()
+  -- Prefer map panel overlay (always visible in-game), then root.
+  if modules.game_interface then
+    if modules.game_interface.getMapPanel then
+      local map = modules.game_interface.getMapPanel()
+      if map then
+        return map
+      end
+    end
+    if modules.game_interface.getRootPanel then
+      return modules.game_interface.getRootPanel()
+    end
+  end
+  return nil
+end
+
+local function ensureBar()
+  if not PassMissions or not PassMissionCount then
+    local ok, err = pcall(function() dofile('pass_missions') end)
+    if not ok then
+      log('pass_missions load failed: ' .. tostring(err))
+      return false
+    end
+  end
+
+  local host = hostPanel()
+  if not host then
+    log('no host panel yet')
+    return false
+  end
+
+  if passBar then
+    local alive = true
+    pcall(function()
+      if passBar.isDestroyed and passBar:isDestroyed() then
+        alive = false
+      end
+    end)
+    if alive then
+      -- Reparent if needed
+      pcall(function()
+        if passBar:getParent() ~= host then
+          passBar:setParent(host)
+        end
+      end)
+      refresh()
+      return true
+    end
+    passBar = nil
+    slotWidgets = {}
+  end
+
+  g_ui.importStyle('game_zdechlak_passbar')
+  local ok, widget = pcall(function()
+    return g_ui.createWidget('PassBarRoot', host)
+  end)
+  if not ok or not widget then
+    log('createWidget failed: ' .. tostring(widget))
+    return false
+  end
+  passBar = widget
+  passBar:setId('zdechlakPassBar')
+  buildSlots(passBar:getChildById('slotsRow'))
+  refresh()
+  log('mounted on map/root, current=' .. tostring(currentIndex))
+  return true
+end
+
+local function scheduleEnsure(tries)
+  tries = tries or 0
+  if ensureBar() then
+    return
+  end
+  if tries >= 20 then
+    log('give up mounting after retries')
+    return
+  end
+  if retryEvent then
+    removeEvent(retryEvent)
+    retryEvent = nil
+  end
+  retryEvent = scheduleEvent(function()
+    retryEvent = nil
+    scheduleEnsure(tries + 1)
+  end, 250)
+end
+
+local function onGameStart()
+  loadSettings()
+  scheduleEnsure(0)
+end
+
+local function onGameEnd()
+  if retryEvent then
+    removeEvent(retryEvent)
+    retryEvent = nil
+  end
+  if passBar then
+    passBar:destroy()
+    passBar = nil
+  end
+  slotWidgets = {}
+end
+
+function init()
+  g_ui.importStyle('game_zdechlak_passbar')
+  pcall(function() dofile('pass_missions') end)
+  loadSettings()
+  connect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd,
+    onTextMessage = onTextMessage
+  })
+  if g_game.isOnline() then
+    onGameStart()
+  end
+  log('init')
+end
+
+function terminate()
+  disconnect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd,
+    onTextMessage = onTextMessage
+  })
+  onGameEnd()
+end
+
+function attachToTopBar(topBar)
+  -- Legacy no-op compatibility with older topbar hooks.
+  return ensureBar()
+end
+
+function PassBar_setCurrent(index)
+  setCurrent(index)
+end
+
+function PassBar_getCurrent()
+  return currentIndex
+end

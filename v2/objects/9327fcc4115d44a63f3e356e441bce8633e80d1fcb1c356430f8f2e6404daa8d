@@ -1,0 +1,10 @@
+Module
+  name: game_zdechlak_passbar
+  description: ZDECHLAK Pass progress bar (always on map)
+  author: ZDECHLAK
+  website: https://zdechlak.pl
+  sandboxed: true
+  scripts: [ pass_missions, game_zdechlak_passbar ]
+  dependencies: [ game_interface, corelib ]
+  @onLoad: init()
+  @onUnload: terminate()

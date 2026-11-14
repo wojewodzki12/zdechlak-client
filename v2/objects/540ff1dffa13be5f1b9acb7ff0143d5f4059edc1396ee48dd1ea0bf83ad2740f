@@ -1,0 +1,10 @@
+Module
+  name: game_zdechlak_passbar
+  description: ZDECHLAK Pass grey top strip (Options toggle)
+  author: ZDECHLAK
+  website: https://zdechlak.pl
+  sandboxed: true
+  scripts: [ pass_missions, game_zdechlak_passbar ]
+  dependencies: [ game_interface, corelib, client_options ]
+  @onLoad: init()
+  @onUnload: terminate()

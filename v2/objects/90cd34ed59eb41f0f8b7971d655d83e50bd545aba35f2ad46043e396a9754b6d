@@ -1,0 +1,90 @@
+buttonsWindow = nil
+contentsPanel = nil
+
+function init()
+  buttonsWindow = g_ui.loadUI('buttons', modules.game_interface.getRightPanel())
+  buttonsWindow:disableResize()
+  buttonsWindow:setup()
+  contentsPanel = buttonsWindow.contentsPanel
+  -- Icons live on Pass hub; keep the empty strip off the right panel.
+  pcall(function() buttonsWindow:close() end)
+end
+
+function terminate()
+  buttonsWindow:destroy()
+end
+
+function takeButtons(buttons)
+  if modules.game_zdechlak_passbar and modules.game_zdechlak_passbar.dockGameButtons then
+    for _, button in ipairs(buttons) do
+      takeButton(button, true)
+    end
+    modules.game_zdechlak_passbar.dockGameButtons()
+    return
+  end
+  if not buttonsWindow.forceOpen or not contentsPanel.buttons then return end
+  for i, button in ipairs(buttons) do
+    takeButton(button, true)
+  end
+  updateOrder()
+end
+
+function takeButton(button, dontUpdateOrder)
+  -- Prefer Pass hub tools row (classic layout keeps top chrome clean).
+  if modules.game_zdechlak_passbar and modules.game_zdechlak_passbar.dockGameButtons then
+    local bid = ''
+    pcall(function() bid = button and button:getId() or '' end)
+    if bid == 'skillsButton' or bid == 'battleButton' or bid == 'vipListButton'
+        or bid == 'unjustifiedPointsButton' or bid == 'preyButton' or bid == 'preyTrackerButton'
+        or bid == 'questTrackerButton' or bid == 'cooldownButton' then
+      -- Tabs replace S/B/V; other ids removed from side UI entirely.
+      pcall(function() button:hide() end)
+      return
+    end
+    local passBar = nil
+    pcall(function()
+      local topBar = modules.game_interface and modules.game_interface.getTopBar and modules.game_interface.getTopBar()
+      if topBar then
+        passBar = topBar:recursiveGetChildById('zdechlakPassBar')
+      end
+    end)
+    if passBar then
+      local row = passBar:getChildById('toolsRow')
+      if row and button then
+        button:setParent(row)
+        if button.setSize then
+          button:setSize({ width = 29, height = 29 })
+        end
+        button:show()
+        if not dontUpdateOrder then
+          modules.game_zdechlak_passbar.dockGameButtons()
+        end
+        return
+      end
+    end
+    -- Pass hub not ready yet; leave on topmenu panel, dock pass will collect later.
+    return
+  end
+  if not buttonsWindow.forceOpen or not contentsPanel.buttons then return end
+  button:setParent(contentsPanel.buttons)
+  if not dontUpdateOrder then
+    updateOrder()
+  end
+end
+
+function updateOrder()
+   local children = contentsPanel.buttons:getChildren()
+   table.sort(children, function(a, b)
+    return (a.index or 1000) < (b.index or 1000)
+   end)
+   contentsPanel.buttons:reorderChildren(children)
+   local visibleCount = 0
+   for _, child in ipairs(children) do
+    if child:isVisible() then
+      visibleCount = visibleCount + 1
+    end
+   end
+   if visibleCount > 6 and buttonsWindow:getHeight() < 30 then
+    buttonsWindow:setHeight(buttonsWindow:getHeight() + 22)
+   end
+end

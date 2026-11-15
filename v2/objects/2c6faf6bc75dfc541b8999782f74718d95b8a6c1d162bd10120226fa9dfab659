@@ -1,0 +1,775 @@
+-- ZDECHLAK Pass Hub - grey top strip with scrollable mission slots + Pass+ CTA/days.
+-- Sync from server: "Zdechlak Pass #N ..." and "Zdechlak PassHub | current=N | plus=0/1 | days=D"
+
+local VIEW = 10
+local SETTINGS_NODE = 'zdechlak-passbar'
+local OPTION_KEY = 'passBar'
+local passBar = nil
+local slotWidgets = {}
+local currentIndex = 1
+local viewStart = 1
+local hasPlus = false
+local plusDays = 0
+local retryEvent = nil
+
+local function log(msg)
+  pcall(function()
+    g_logger.info('[zdechlak-passbar] ' .. tostring(msg))
+  end)
+end
+
+local function optionEnabled()
+  if modules.client_options and modules.client_options.getOption then
+    local v = modules.client_options.getOption(OPTION_KEY)
+    if v ~= nil then
+      return v and true or false
+    end
+  end
+  return g_settings.getBoolean(OPTION_KEY, true)
+end
+
+local function settings()
+  local node = g_settings.getNode(SETTINGS_NODE)
+  if not node then
+    node = {}
+  end
+  if not node.chars then
+    node.chars = {}
+  end
+  return node
+end
+
+local function charKey()
+  local name = g_game.getCharacterName and g_game.getCharacterName() or nil
+  if type(name) ~= 'string' or name == '' then
+    return 'default'
+  end
+  return name:lower()
+end
+
+local function saveSettings()
+  local node = settings()
+  node.current = currentIndex
+  node.chars[charKey()] = currentIndex
+  node.hasPlus = hasPlus and 1 or 0
+  node.plusDays = plusDays
+  g_settings.setNode(SETTINGS_NODE, node)
+end
+
+local function loadSettings()
+  local node = settings()
+  local key = charKey()
+  local cur = tonumber(node.chars and node.chars[key]) or tonumber(node.current)
+  if cur and cur >= 1 and cur <= (PassMissionCount + 1) then
+    currentIndex = cur
+  else
+    currentIndex = 1
+  end
+  hasPlus = tonumber(node.hasPlus) == 1
+  plusDays = tonumber(node.plusDays) or 0
+end
+
+local function mission(index)
+  return PassMissions[index]
+end
+
+local function maxViewStart()
+  return math.max(1, PassMissionCount - VIEW + 1)
+end
+
+local function clampView()
+  viewStart = math.max(1, math.min(maxViewStart(), viewStart))
+end
+
+local function centerViewOnCurrent()
+  -- Keep current mission as the leftmost visible slot (020 first; < shows earlier).
+  local focus = currentIndex
+  if focus > PassMissionCount then
+    focus = PassMissionCount
+  end
+  viewStart = focus
+  clampView()
+end
+
+local function missionForSlot(slotPos)
+  return viewStart + (slotPos - 1)
+end
+
+local function statusFor(index)
+  if not index or index < 1 or index > PassMissionCount then
+    return 'empty'
+  end
+  local m = mission(index)
+  if currentIndex > PassMissionCount then
+    return 'completed'
+  end
+  if index < currentIndex then
+    return 'completed'
+  end
+  if index == currentIndex then
+    if m and m.free == false and not hasPlus then
+      return 'plus_locked'
+    end
+    return 'active'
+  end
+  if m and m.free == false and not hasPlus then
+    return 'plus_locked'
+  end
+  return 'locked'
+end
+
+local function ascii(text)
+  if type(text) ~= 'string' then
+    return ''
+  end
+  return text:gsub('[\128-\255]', '')
+end
+
+local function currentText()
+  if currentIndex > PassMissionCount then
+    return '#100 Pass complete'
+  end
+  local m = mission(currentIndex)
+  if not m then
+    return '-'
+  end
+  local name = ascii(m.name)
+  local objective = ascii(m.objective or '')
+  local reward = ascii(m.rewardText or '-')
+  local extra = ''
+  if m.free == false and not hasPlus then
+    extra = '  |  Pass+ required'
+  end
+  return string.format('#%03d %s  |  %s  |  Reward: %s%s', currentIndex, name, objective, reward, extra)
+end
+
+local function paintSlot(widget, index)
+  local item = widget:getChildById('item')
+  local badge = widget:getChildById('badge')
+  local st = statusFor(index)
+  local m = (index and index >= 1 and index <= PassMissionCount) and mission(index) or nil
+
+  if st == 'empty' or not m then
+    if item then item:setItemId(0) end
+    if badge then badge:setText('') end
+    widget:setTooltip('')
+    widget:setBorderWidth(1)
+    widget:setBorderColor('#303030')
+    widget:setOpacity(0.3)
+    return
+  end
+
+  if item then
+    item:setItemId(m.icon or 2157)
+  end
+  if badge then
+    badge:setText(string.format('%03d', index))
+  end
+
+  if st == 'active' then
+    widget:setOpacity(1.0)
+    widget:setBorderWidth(2)
+    widget:setBorderColor('#f0c040')
+  elseif st == 'completed' then
+    widget:setOpacity(1.0)
+    widget:setBorderWidth(2)
+    widget:setBorderColor('#40c070')
+  elseif st == 'plus_locked' then
+    widget:setOpacity(0.55)
+    widget:setBorderWidth(2)
+    widget:setBorderColor('#c080ff')
+  else
+    widget:setOpacity(0.55)
+    widget:setBorderWidth(1)
+    widget:setBorderColor('#707070')
+  end
+
+  local tip = string.format('#%03d %s\n%s\nReward: %s', index, ascii(m.name), ascii(m.objective), ascii(m.rewardText or '-'))
+  if st == 'completed' then
+    tip = tip .. '\n(Completed)'
+  elseif st == 'active' then
+    tip = tip .. '\n(Current)'
+  elseif st == 'plus_locked' then
+    tip = tip .. '\n(Pass+ required)'
+  else
+    tip = tip .. '\n(Locked)'
+  end
+  if m.free == false then
+    tip = tip .. '\n[Pass+ mission]'
+  else
+    tip = tip .. '\n[Free mission]'
+  end
+  widget:setTooltip(tip)
+end
+
+local function refreshPlusPanel()
+  if not passBar then
+    return
+  end
+  local panel = passBar:getChildById('plusPanel')
+  if not panel then
+    return
+  end
+  local buyBtn = panel:getChildById('buyPassBtn')
+  local daysLabel = panel:getChildById('daysLabel')
+  local days = math.max(0, tonumber(plusDays) or 0)
+
+  if hasPlus and days > 0 then
+    if buyBtn then buyBtn:hide() end
+    if daysLabel then
+      daysLabel:setText(string.format('%d day(s) left', days))
+      daysLabel:setTooltip(string.format('Pass+ active: %d day(s) left', days))
+      daysLabel:show()
+    end
+  elseif hasPlus then
+    if buyBtn then buyBtn:hide() end
+    if daysLabel then
+      daysLabel:setText('Pass+ active')
+      daysLabel:setTooltip('Pass+ active')
+      daysLabel:show()
+    end
+  else
+    if daysLabel then daysLabel:hide() end
+    if buyBtn then
+      buyBtn:setTooltip('All locked Pass+ rewards unlock instantly.')
+      buyBtn:show()
+    end
+  end
+end
+
+local function refresh()
+  if not passBar then
+    return
+  end
+  clampView()
+  for i = 1, VIEW do
+    if slotWidgets[i] then
+      paintSlot(slotWidgets[i], missionForSlot(i))
+    end
+  end
+  local title = passBar:getChildById('hubTitle')
+  if title then
+    title:setText('ZDECHLAK PASS HUB')
+    title:setTooltip('Zdechlak Pass Hub')
+  end
+  local label = passBar:getChildById('currentLabel')
+  if label then
+    local detail = currentText()
+    label:setText(detail)
+    label:setTooltip(detail)
+  end
+  local prev = passBar:getChildById('prevBtn')
+  local next = passBar:getChildById('nextBtn')
+  if prev then
+    prev:setEnabled(viewStart > 1)
+  end
+  if next then
+    next:setEnabled(viewStart < maxViewStart())
+  end
+  refreshPlusPanel()
+end
+
+local function setCurrent(index, persist, fromServer)
+  index = math.max(1, math.min(PassMissionCount + 1, tonumber(index) or 1))
+  local changed = (index ~= currentIndex)
+  currentIndex = index
+  if fromServer or changed then
+    centerViewOnCurrent()
+  end
+  if persist ~= false then
+    saveSettings()
+  end
+  refresh()
+end
+
+local function setPlusState(active, days, persist)
+  hasPlus = active and true or false
+  plusDays = math.max(0, tonumber(days) or 0)
+  if persist ~= false then
+    saveSettings()
+  end
+  refresh()
+end
+
+local function shiftView(delta)
+  viewStart = viewStart + delta
+  clampView()
+  refresh()
+end
+
+local function openBuyPass()
+  if modules.game_zdechlak_shop and modules.game_zdechlak_shop.show then
+    modules.game_zdechlak_shop.show()
+    return
+  end
+  if g_platform and g_platform.openUrl then
+    g_platform.openUrl('https://zdechlak.pl/points')
+  end
+end
+
+local function onTextMessage(mode, text)
+  if type(text) ~= 'string' then
+    return
+  end
+
+  local hubCur, hubPlus, hubDays = text:match('[Zz]dechlak [Pp]ass[Hh]ub%s*|%s*current=(%d+)%s*|%s*plus=(%d+)%s*|%s*days=(%d+)')
+  if hubCur then
+    setPlusState(tonumber(hubPlus) == 1, tonumber(hubDays) or 0, true)
+    local idx = tonumber(hubCur)
+    if idx and idx >= 1 then
+      setCurrent(idx, true, true)
+    end
+    return
+  end
+
+  local done = text:match('[Zz]dechlak [Pp]ass #(%d+).-[Cc]ompleted')
+  if done then
+    local idx = tonumber(done)
+    if idx then
+      setCurrent(idx + 1, true, true)
+    end
+    return
+  end
+
+  local n = text:match('[Zz]dechlak [Pp]ass #(%d+)')
+  if n then
+    local idx = tonumber(n)
+    if idx and idx >= 1 and idx <= PassMissionCount then
+      setCurrent(idx, true, true)
+    end
+  end
+
+  local days = text:match('[Zz]dechlak [Pp]ass%+%D-(%d+)%s*[Dd]ays')
+  if days then
+    setPlusState(true, tonumber(days), true)
+  elseif text:find('[Zz]dechlak [Pp]ass%+.-[Ii]nactive') or text:find('[Zz]dechlak [Pp]ass%+.-[Nn]ot active') then
+    setPlusState(false, 0, true)
+  end
+end
+
+local function buildSlots(row)
+  slotWidgets = {}
+  if not row then
+    return
+  end
+  row:destroyChildren()
+  for i = 1, VIEW do
+    local slot = g_ui.createWidget('PassSlot', row)
+    slot:setId('passSlot' .. i)
+    slotWidgets[i] = slot
+  end
+end
+
+local function wireControls()
+  if not passBar then
+    return
+  end
+  local prev = passBar:getChildById('prevBtn')
+  local next = passBar:getChildById('nextBtn')
+  if prev then
+    prev.onClick = function() shiftView(-1) end
+  end
+  if next then
+    next.onClick = function() shiftView(1) end
+  end
+  local panel = passBar:getChildById('plusPanel')
+  local buyBtn = panel and panel:getChildById('buyPassBtn')
+  if buyBtn then
+    buyBtn.onClick = openBuyPass
+  end
+end
+
+local function topMenuPanels()
+  local top = modules.client_topmenu and modules.client_topmenu.getTopMenu and modules.client_topmenu.getTopMenu()
+  if not top then
+    return nil, nil
+  end
+  return top.leftGameButtonsPanel, top.rightGameButtonsPanel
+end
+
+local function undockGameButtons()
+  if not passBar then
+    return
+  end
+  local row = passBar:getChildById('toolsRow')
+  if not row then
+    return
+  end
+  local leftPanel, rightPanel = topMenuPanels()
+  local dest = rightPanel or leftPanel
+  if not dest then
+    return
+  end
+  local children = row:getChildren()
+  for i = #children, 1, -1 do
+    pcall(function()
+      children[i]:setParent(dest)
+    end)
+  end
+end
+
+-- Skills / Battle / VIP live as text tabs under inventory; keep them off Pass.
+local PASS_SKIP_IDS = {
+  skillsButton = true,
+  battleButton = true,
+  vipListButton = true,
+}
+
+-- Remove from UI entirely (user nums 211/217/218/221/222 on 1.0.63).
+local PASS_REMOVE_IDS = {
+  unjustifiedPointsButton = true,
+  preyButton = true,
+  preyTrackerButton = true,
+  questTrackerButton = true,
+  cooldownButton = true,
+}
+
+-- Force onto Pass top tools row (user nums 223/224).
+local PASS_FORCE_IDS = {
+  botButton = true,
+  botAnalyzersButton = true,
+}
+
+local function shouldSkipPassDock(btn)
+  local id = ''
+  pcall(function() id = btn:getId() or '' end)
+  return PASS_SKIP_IDS[id] == true
+end
+
+local function shouldRemovePassDock(btn)
+  local id = ''
+  pcall(function() id = btn:getId() or '' end)
+  return PASS_REMOVE_IDS[id] == true
+end
+
+local function closeSideWindowById(id)
+  if not modules.game_interface then
+    return
+  end
+  local panels = {}
+  pcall(function()
+    if modules.game_interface.getRightPanel then
+      panels[#panels + 1] = modules.game_interface.getRightPanel()
+    end
+    if modules.game_interface.getLeftPanel then
+      panels[#panels + 1] = modules.game_interface.getLeftPanel()
+    end
+  end)
+  for _, panel in ipairs(panels) do
+    if panel then
+      pcall(function()
+        local w = panel:recursiveGetChildById(id)
+        if w and w.close then
+          w:close()
+        elseif w and w.hide then
+          w:hide()
+        end
+      end)
+    end
+  end
+end
+
+local function cleanupRemovedSideUi()
+  -- Close leftover side windows for removed toggles.
+  closeSideWindowById('unjustifiedPointsWindow')
+  closeSideWindowById('cooldownWindow')
+  closeSideWindowById('questTracker')
+  closeSideWindowById('preyTracker')
+  pcall(function()
+    if modules.game_buttons and modules.game_buttons.buttonsWindow then
+      modules.game_buttons.buttonsWindow:close()
+    end
+  end)
+end
+
+function dockGameButtons()
+  if not passBar then
+    return false
+  end
+  local row = passBar:getChildById('toolsRow')
+  if not row then
+    return false
+  end
+  local leftPanel, rightPanel = topMenuPanels()
+  local collected = {}
+
+  local function collectFrom(panel)
+    if not panel then
+      return
+    end
+    local kids = panel:getChildren()
+    for i = 1, #kids do
+      collected[#collected + 1] = kids[i]
+    end
+  end
+
+  collectFrom(leftPanel)
+  collectFrom(rightPanel)
+
+  -- Also pull any that already sit in toolsRow (re-dock / late modules).
+  for _, child in ipairs(row:getChildren()) do
+    collected[#collected + 1] = child
+  end
+
+  -- Deduplicate by id while preserving order.
+  local seen = {}
+  local unique = {}
+  for _, btn in ipairs(collected) do
+    local id = ''
+    pcall(function() id = btn:getId() or '' end)
+    if shouldRemovePassDock(btn) then
+      pcall(function()
+        if btn.setParent and leftPanel then
+          btn:setParent(leftPanel)
+        end
+        btn:hide()
+      end)
+    elseif shouldSkipPassDock(btn) then
+      -- Hide original toggle icons; inventory sidebar tabs replace them.
+      pcall(function()
+        if btn.setParent and leftPanel then
+          btn:setParent(leftPanel)
+        end
+        btn:hide()
+      end)
+    elseif id == '' or not seen[id] then
+      if id ~= '' then
+        seen[id] = true
+      end
+      unique[#unique + 1] = btn
+    end
+  end
+
+  table.sort(unique, function(a, b)
+    local ai = (a.index or 1000)
+    local bi = (b.index or 1000)
+    return ai < bi
+  end)
+
+  -- ~30% larger than the old 22px Pass icons.
+  local iconSize = 29
+  for _, btn in ipairs(unique) do
+    pcall(function()
+      btn:setParent(row)
+      if btn.setSize then
+        btn:setSize({ width = iconSize, height = iconSize })
+      end
+      btn:show()
+    end)
+  end
+
+  -- Bot + Analyzers always visible on Pass (were hidden / easy to miss).
+  for id, _ in pairs(PASS_FORCE_IDS) do
+    pcall(function()
+      local btn = nil
+      if modules.client_topmenu and modules.client_topmenu.getButton then
+        btn = modules.client_topmenu.getButton(id)
+      end
+      if not btn then
+        for _, child in ipairs(row:getChildren()) do
+          if child:getId() == id then
+            btn = child
+            break
+          end
+        end
+      end
+      if btn then
+        btn:setParent(row)
+        if btn.setSize then
+          btn:setSize({ width = iconSize, height = iconSize })
+        end
+        btn:show()
+      end
+    end)
+  end
+
+  cleanupRemovedSideUi()
+
+  if leftPanel then leftPanel:hide() end
+  if rightPanel then rightPanel:hide() end
+  return true
+end
+
+local function scheduleDock()
+  dockGameButtons()
+  scheduleEvent(function() dockGameButtons() end, 400)
+  scheduleEvent(function() dockGameButtons() end, 1200)
+  scheduleEvent(function() dockGameButtons() end, 2500)
+end
+
+local function forceClassicView()
+  if g_app.isMobile and g_app.isMobile() then
+    return
+  end
+  if modules.client_options and modules.client_options.setOption then
+    pcall(function()
+      modules.client_options.setOption('classicView', true, true)
+      modules.client_options.setOption('rightPanels', 1, true)
+      modules.client_options.setOption('containerPanel', 5, true)
+    end)
+  else
+    g_settings.set('classicView', true)
+    g_settings.setNumber('rightPanels', 1)
+    g_settings.setNumber('containerPanel', 5)
+    if modules.game_interface and modules.game_interface.refreshViewMode then
+      pcall(function() modules.game_interface.refreshViewMode() end)
+    end
+  end
+end
+
+local function hostPanel()
+  if modules.game_interface and modules.game_interface.getTopBar then
+    return modules.game_interface.getTopBar()
+  end
+  return nil
+end
+
+local function destroyBar()
+  undockGameButtons()
+  if passBar then
+    pcall(function() passBar:destroy() end)
+    passBar = nil
+  end
+  slotWidgets = {}
+end
+
+local function ensureBar()
+  if not optionEnabled() then
+    destroyBar()
+    return true
+  end
+
+  if not PassMissions or not PassMissionCount then
+    local ok, err = pcall(function() dofile('pass_missions') end)
+    if not ok then
+      log('pass_missions load failed: ' .. tostring(err))
+      return false
+    end
+  end
+
+  local host = hostPanel()
+  if not host then
+    return false
+  end
+
+  if passBar then
+    local alive = true
+    pcall(function()
+      if passBar.isDestroyed and passBar:isDestroyed() then
+        alive = false
+      end
+    end)
+    if alive then
+      pcall(function()
+        if passBar:getParent() ~= host then
+          passBar:setParent(host)
+        end
+        host:moveChildToIndex(passBar, 1)
+      end)
+      passBar:show()
+      refresh()
+      scheduleDock()
+      return true
+    end
+    passBar = nil
+    slotWidgets = {}
+  end
+
+  g_ui.importStyle('game_zdechlak_passbar')
+  local ok, widget = pcall(function()
+    return g_ui.createWidget('PassBarRoot', host)
+  end)
+  if not ok or not widget then
+    log('createWidget failed: ' .. tostring(widget))
+    return false
+  end
+  passBar = widget
+  passBar:setId('zdechlakPassBar')
+  pcall(function() host:moveChildToIndex(passBar, 1) end)
+  buildSlots(passBar:getChildById('slotsRow'))
+  wireControls()
+  centerViewOnCurrent()
+  refresh()
+  scheduleDock()
+  log('hub mounted current=' .. tostring(currentIndex) .. ' plus=' .. tostring(hasPlus))
+  return true
+end
+
+local function scheduleEnsure(tries)
+  tries = tries or 0
+  if ensureBar() then
+    return
+  end
+  if tries >= 20 then
+    return
+  end
+  if retryEvent then
+    removeEvent(retryEvent)
+    retryEvent = nil
+  end
+  retryEvent = scheduleEvent(function()
+    retryEvent = nil
+    scheduleEnsure(tries + 1)
+  end, 250)
+end
+
+local function onGameStart()
+  forceClassicView()
+  loadSettings()
+  centerViewOnCurrent()
+  scheduleEnsure(0)
+  scheduleEvent(scheduleDock, 100)
+end
+
+local function onGameEnd()
+  if retryEvent then
+    removeEvent(retryEvent)
+    retryEvent = nil
+  end
+  destroyBar()
+end
+
+function show()
+  scheduleEnsure(0)
+end
+
+function init()
+  g_ui.importStyle('game_zdechlak_passbar')
+  pcall(function() dofile('pass_missions') end)
+  g_settings.setDefault(OPTION_KEY, true)
+  loadSettings()
+  connect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd,
+    onTextMessage = onTextMessage
+  })
+  if g_game.isOnline() then
+    onGameStart()
+  end
+  log('init hub')
+end
+
+function terminate()
+  disconnect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd,
+    onTextMessage = onTextMessage
+  })
+  onGameEnd()
+end
+
+function attachToTopBar(topBar)
+  return ensureBar()
+end
+
+function PassBar_setCurrent(index)
+  setCurrent(index, true, true)
+end
+
+function PassBar_getCurrent()
+  return currentIndex
+end
+
+function PassBar_show()
+  show()
+end

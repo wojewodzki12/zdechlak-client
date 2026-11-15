@@ -1,0 +1,255 @@
+-- Temporary: number every right-panel window/button so Jakub can point by digit.
+-- Remove after layout feedback.
+
+local counter = 0
+local retryEvent = nil
+local numbered = {}
+
+local WINDOW_STYLES = {
+  MiniWindow = true,
+  HeadlessMiniWindow = true,
+  GameButtonsWindow = true,
+  InventoryWindow = true,
+  HealthInfoWindow = true,
+  MinimapWindow = true,
+  SkillsWindow = true,
+  BattleWindow = true,
+  VIPWindow = true,
+  SpellListWindow = true,
+  UnjustifiedPointsWindow = true,
+  CooldownWindow = true,
+}
+
+local BUTTON_STYLES = {
+  Button = true,
+  UIButton = true,
+  TopButton = true,
+  TopToggleButton = true,
+  CheckBox = true,
+  UICheckBox = true,
+  InventoryButton = true,
+  CombatBox = true,
+  MinimapSideButton = true,
+  MinimapFloorUpButton = true,
+  MinimapFloorDownButton = true,
+  MinimapZoomInButton = true,
+  MinimapZoomOutButton = true,
+  MinimapResetButton = true,
+  PurseButton = true,
+  StandModeBox = true,
+  ChaseModeBox = true,
+  FightOffensiveBox = true,
+  FightBalancedBox = true,
+  FightDefensiveBox = true,
+  SafeFightBox = true,
+  MountButton = true,
+  WhiteDoveBox = true,
+  WhiteHandBox = true,
+  YellowHandBox = true,
+  RedFistBox = true,
+}
+
+local function styleName(widget)
+  local name = ''
+  pcall(function()
+    if widget.getStyleName then
+      name = widget:getStyleName() or ''
+    end
+  end)
+  if name == '' then
+    pcall(function()
+      if widget.getClassName then
+        name = widget:getClassName() or ''
+      end
+    end)
+  end
+  return name
+end
+
+local function clearBadge(widget)
+  if not widget then return end
+  pcall(function()
+    local old = widget:getChildById('zdechlakUiNum')
+    if old then old:destroy() end
+  end)
+end
+
+local function placeBadge(widget, n, big)
+  clearBadge(widget)
+  local ok, badge = pcall(function()
+    return g_ui.createWidget('Label', widget)
+  end)
+  if not ok or not badge then
+    return
+  end
+  badge:setId('zdechlakUiNum')
+  badge:setText(tostring(n))
+  badge:setFont(big and 'verdana-11px-rounded' or 'verdana-9px-rounded')
+  badge:setColor('#ffff00')
+  badge:setBackgroundColor('#aa0000ee')
+  badge:setTextAlign(AlignCenter)
+  badge:setPhantom(true)
+  badge:raise()
+  pcall(function()
+    local wid = widget:getId() or ''
+    local wtxt = ''
+    if widget.getText then wtxt = widget:getText() or '' end
+    local tip = '#' .. tostring(n) .. ' id=' .. tostring(wid)
+    if wtxt ~= '' then tip = tip .. ' text=' .. tostring(wtxt) end
+    badge:setTooltip(tip)
+  end)
+  pcall(function()
+    badge:addAnchor(AnchorTop, 'parent', AnchorTop)
+    badge:addAnchor(AnchorLeft, 'parent', AnchorLeft)
+  end)
+  badge:setMarginTop(1)
+  badge:setMarginLeft(1)
+  if big then
+    badge:setWidth(22)
+    badge:setHeight(16)
+  else
+    badge:setWidth(16)
+    badge:setHeight(12)
+  end
+  numbered[#numbered + 1] = badge
+end
+
+local function nextNum()
+  counter = counter + 1
+  return counter
+end
+
+local function walk(widget, depth)
+  if not widget or depth > 12 then
+    return
+  end
+  local id = ''
+  pcall(function() id = widget:getId() or '' end)
+  if id == 'zdechlakUiNum' then
+    return
+  end
+
+  local style = styleName(widget)
+  local isWindow = WINDOW_STYLES[style] or (type(id) == 'string' and id:find('Window', 1, true))
+  local isButton = BUTTON_STYLES[style]
+
+  -- Catch unlabeled combat/minimap buttons by size+click.
+  if not isButton and not isWindow then
+    local hasClick = false
+    pcall(function() hasClick = widget.onClick ~= nil end)
+    local w, h = 0, 0
+    pcall(function()
+      local s = widget:getSize()
+      if s then w = s.width or 0; h = s.height or 0 end
+    end)
+    if hasClick and w > 0 and w <= 56 and h > 0 and h <= 36 then
+      isButton = true
+    end
+  end
+
+  if isWindow or isButton then
+    placeBadge(widget, nextNum(), isWindow)
+  end
+
+  local children = nil
+  pcall(function() children = widget:getChildren() end)
+  if type(children) == 'table' then
+    for i = 1, #children do
+      walk(children[i], depth + 1)
+    end
+  end
+end
+
+local function clearAll()
+  for i = 1, #numbered do
+    pcall(function()
+      if numbered[i] and numbered[i].destroy then
+        numbered[i]:destroy()
+      end
+    end)
+  end
+  numbered = {}
+  counter = 0
+end
+
+local function numberRightPanels()
+  clearAll()
+  if not modules.game_interface then
+    return
+  end
+  local hosts = {}
+  if modules.game_interface.getRightPanelsHost then
+    local host = modules.game_interface.getRightPanelsHost()
+    if host then hosts[#hosts + 1] = host end
+  end
+  if modules.game_interface.getRightPanel then
+    local p = modules.game_interface.getRightPanel()
+    if p then hosts[#hosts + 1] = p end
+  end
+  -- Also cover left side panels (classic often mirrors).
+  if modules.game_interface.getLeftPanel then
+    local p = modules.game_interface.getLeftPanel()
+    if p then hosts[#hosts + 1] = p end
+  end
+  if modules.game_interface.getLeftPanelsHost then
+    local host = modules.game_interface.getLeftPanelsHost()
+    if host then hosts[#hosts + 1] = host end
+  end
+
+  local seen = {}
+  for _, host in ipairs(hosts) do
+    if host and not seen[host] then
+      seen[host] = true
+      walk(host, 0)
+    end
+  end
+  pcall(function()
+    g_logger.info('[zdechlak-ui-numbers] numbered ' .. tostring(counter) .. ' widgets')
+  end)
+end
+
+local function scheduleNumber()
+  numberRightPanels()
+  if retryEvent then
+    removeEvent(retryEvent)
+    retryEvent = nil
+  end
+  -- Late modules (bot, analyzers) add buttons after login.
+  scheduleEvent(numberRightPanels, 500)
+  scheduleEvent(numberRightPanels, 1500)
+  scheduleEvent(numberRightPanels, 3000)
+end
+
+local function onGameStart()
+  scheduleNumber()
+end
+
+local function onGameEnd()
+  if retryEvent then
+    removeEvent(retryEvent)
+    retryEvent = nil
+  end
+  clearAll()
+end
+
+function init()
+  connect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd,
+  })
+  if g_game.isOnline() then
+    onGameStart()
+  end
+end
+
+function terminate()
+  disconnect(g_game, {
+    onGameStart = onGameStart,
+    onGameEnd = onGameEnd,
+  })
+  onGameEnd()
+end
+
+function refresh()
+  scheduleNumber()
+end

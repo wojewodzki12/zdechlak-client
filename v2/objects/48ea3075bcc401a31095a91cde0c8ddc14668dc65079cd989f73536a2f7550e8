@@ -1,0 +1,10 @@
+-- Layout number badges removed after feedback (1.0.64+).
+
+function init()
+end
+
+function terminate()
+end
+
+function refresh()
+end

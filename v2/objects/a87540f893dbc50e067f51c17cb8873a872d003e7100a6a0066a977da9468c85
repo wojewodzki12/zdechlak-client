@@ -1,0 +1,9 @@
+Module
+  name: game_zdechlak_ui_numbers
+  description: Disabled - layout feedback numbers removed
+  author: ZDECHLAK
+  website: https://zdechlak.pl
+  sandboxed: true
+  autoload: false
+  scripts: [ game_zdechlak_ui_numbers ]
+  dependencies: [ game_interface, corelib ]

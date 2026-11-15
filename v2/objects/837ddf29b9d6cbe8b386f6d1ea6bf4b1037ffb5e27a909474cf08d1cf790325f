@@ -1,0 +1,56 @@
+PassSlot < Panel
+  size: 34 34
+  image-source: /images/ui/item
+  focusable: false
+  phantom: false
+
+  UIItem
+    id: item
+    anchors.fill: parent
+    virtual: true
+    phantom: true
+
+  Label
+    id: badge
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    margin-right: 1
+    margin-bottom: 0
+    font: verdana-9px-rounded
+    color: #ffffff
+    text-auto-resize: true
+    phantom: true
+
+PassBarRoot < Panel
+  id: zdechlakPassBar
+  height: 42
+  focusable: false
+  phantom: false
+  image-source: /images/ui/panel_flat
+  image-border: 3
+  image-color: #6a6a6a
+  padding-left: 8
+  padding-right: 8
+  padding-top: 4
+  padding-bottom: 4
+
+  Panel
+    id: slotsRow
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+    size: 186 34
+    layout:
+      type: horizontalBox
+      spacing: 4
+
+  Label
+    id: currentLabel
+    anchors.left: slotsRow.right
+    anchors.right: parent.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 12
+    margin-right: 30%
+    text-align: left
+    font: verdana-11px-rounded
+    color: #f0e6c8
+    text: -

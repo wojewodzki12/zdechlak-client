@@ -1,0 +1,125 @@
+PassSlot < Panel
+  size: 34 34
+  image-source: /images/ui/item
+  focusable: false
+  phantom: false
+
+  UIItem
+    id: item
+    anchors.fill: parent
+    virtual: true
+    phantom: true
+
+  Label
+    id: badge
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    margin-right: 1
+    margin-bottom: 0
+    font: verdana-9px-rounded
+    color: #ffffff
+    text-auto-resize: true
+    phantom: true
+
+PassNavButton < Button
+  size: 20 34
+  font: verdana-11px-rounded
+  text-align: center
+
+PassBarRoot < Panel
+  id: zdechlakPassBar
+  height: 48
+  focusable: false
+  phantom: false
+  image-source: /images/ui/panel_flat
+  image-border: 3
+  image-color: #e0e0e0
+  padding-left: 6
+  padding-right: 8
+  padding-top: 5
+  padding-bottom: 5
+
+  Panel
+    id: toolsRow
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 4
+    size: 300 29
+    layout:
+      type: horizontalBox
+      spacing: 2
+
+  Label
+    id: hubTitle
+    anchors.left: toolsRow.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 4
+    font: verdana-11px-rounded
+    color: #f0c040
+    text-auto-resize: true
+    text: ZDECHLAK PASS HUB
+
+  PassNavButton
+    id: prevBtn
+    anchors.left: hubTitle.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 10
+    text: <
+
+  Panel
+    id: slotsRow
+    anchors.left: prevBtn.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 4
+    size: 376 34
+    layout:
+      type: horizontalBox
+      spacing: 4
+
+  PassNavButton
+    id: nextBtn
+    anchors.left: slotsRow.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 4
+    text: >
+
+  Label
+    id: currentLabel
+    anchors.left: nextBtn.right
+    anchors.right: plusPanel.left
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 10
+    margin-right: 8
+    text-align: left
+    font: verdana-11px-rounded
+    color: #f0e6c8
+    text: -
+
+  Panel
+    id: plusPanel
+    anchors.right: parent.right
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    width: 140
+    focusable: false
+
+    Button
+      id: buyPassBtn
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      size: 100 28
+      font: verdana-11px-rounded
+      text: BUY PASS+
+      color: #1a1a1a
+      background-color: #f0c040
+
+    Label
+      id: daysLabel
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      text-align: right
+      font: verdana-11px-rounded
+      color: #f0c040
+      text-auto-resize: true
+      text: 0 day(s) left
+      visible: false

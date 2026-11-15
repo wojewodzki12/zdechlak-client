@@ -1,0 +1,12 @@
+Module
+  name: game_zdechlak_ui_numbers
+  description: Temporary right-panel UI number badges for layout feedback
+  author: ZDECHLAK
+  website: https://zdechlak.pl
+  sandboxed: true
+  autoload: true
+  autoload-priority: 1500
+  scripts: [ game_zdechlak_ui_numbers ]
+  dependencies: [ game_interface, corelib ]
+  @onLoad: init()
+  @onUnload: terminate()

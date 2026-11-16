@@ -1,5 +1,5 @@
 ZDECHLAK OTC updates/v2 — Stable tip
-Client: 1.0.70 / sequence 72
-Launcher: 1.0.18 / sequence 12
+Client: 1.0.71 / sequence 73
+Launcher: 1.0.19 / sequence 13
 Primary: https://s1.zdechlak.pl:9443/updates/v2
 Fallback: https://raw.githubusercontent.com/wojewodzki12/zdechlak-client/updates/v2

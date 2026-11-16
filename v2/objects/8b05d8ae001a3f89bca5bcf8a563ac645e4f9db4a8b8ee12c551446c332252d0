@@ -1,0 +1,250 @@
+PassSlot < Panel
+  size: 34 34
+  image-source: /images/ui/item
+  focusable: false
+  phantom: false
+
+  UIItem
+    id: item
+    anchors.fill: parent
+    virtual: true
+    phantom: true
+
+  Label
+    id: badge
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    margin-right: 1
+    margin-bottom: 0
+    font: verdana-9px-rounded
+    color: #ffffff
+    text-auto-resize: true
+    phantom: true
+
+PassNavButton < Button
+  size: 20 34
+  font: verdana-11px-rounded
+  text-align: center
+
+PassDecorItem < UIWidget
+  size: 22 22
+  image-smooth: false
+  phantom: true
+  opacity: 0.92
+
+PassBarRoot < Panel
+  id: zdechlakPassBar
+  height: 56
+  focusable: false
+  phantom: false
+  image-source: /images/ui/panel_flat
+  image-border: 3
+  image-color: #e0e0e0
+  padding-left: 6
+  padding-right: 8
+  padding-top: 4
+  padding-bottom: 4
+
+  Panel
+    id: toolsRow
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 4
+    size: 300 29
+    layout:
+      type: horizontalBox
+      spacing: 2
+
+  Label
+    id: hubTitle
+    anchors.left: toolsRow.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 4
+    font: verdana-11px-rounded
+    color: #f0c040
+    text-auto-resize: true
+    text: ZDECHLAK PASS HUB
+
+  PassNavButton
+    id: prevBtn
+    anchors.left: hubTitle.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 78
+    text: <
+
+  Panel
+    id: slotsRow
+    anchors.left: prevBtn.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 4
+    size: 376 34
+    layout:
+      type: horizontalBox
+      spacing: 4
+
+  PassNavButton
+    id: nextBtn
+    anchors.left: slotsRow.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 4
+    text: >
+
+  Label
+    id: currentLabel
+    anchors.left: nextBtn.right
+    anchors.right: plusPanel.left
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    margin-left: 72
+    margin-right: 72
+    margin-top: 4
+    margin-bottom: 4
+    text-align: left
+    text-wrap: true
+    font: verdana-11px-rounded
+    color: #f0e6c8
+    text: -
+
+  // Free-gap loot only (not on buttons / title / mission text). Classic 8.60 rares.
+  PassDecorItem
+    id: decorSoft
+    anchors.left: hubTitle.right
+    anchors.top: parent.top
+    margin-left: 8
+    margin-top: 2
+    image-source: /images/passhub/soft_boots
+    tooltip: Soft Boots
+
+  PassDecorItem
+    id: decorBoh
+    anchors.left: hubTitle.right
+    anchors.bottom: parent.bottom
+    margin-left: 28
+    margin-bottom: 2
+    image-source: /images/passhub/boots_of_haste
+    tooltip: Boots of Haste
+
+  PassDecorItem
+    id: decorRing
+    anchors.left: hubTitle.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 48
+    image-source: /images/passhub/ring_of_the_sky
+    tooltip: Ring of the Sky
+
+  PassDecorItem
+    id: decorGolden
+    anchors.left: nextBtn.right
+    anchors.top: parent.top
+    margin-left: 6
+    margin-top: 1
+    image-source: /images/passhub/golden_armor
+    tooltip: Golden Armor
+
+  PassDecorItem
+    id: decorMpa
+    anchors.left: nextBtn.right
+    anchors.bottom: parent.bottom
+    margin-left: 6
+    margin-bottom: 1
+    image-source: /images/passhub/magic_plate_armor
+    tooltip: Magic Plate Armor
+
+  PassDecorItem
+    id: decorDemonHelm
+    anchors.left: nextBtn.right
+    anchors.top: parent.top
+    margin-left: 30
+    margin-top: 1
+    image-source: /images/passhub/demon_helmet
+    tooltip: Demon Helmet
+
+  PassDecorItem
+    id: decorMagicSword
+    anchors.left: nextBtn.right
+    anchors.bottom: parent.bottom
+    margin-left: 30
+    margin-bottom: 1
+    image-source: /images/passhub/magic_sword
+    tooltip: Magic Sword
+
+  PassDecorItem
+    id: decorDsm
+    anchors.left: nextBtn.right
+    anchors.verticalCenter: parent.verticalCenter
+    margin-left: 52
+    image-source: /images/passhub/dragon_scale_mail
+    tooltip: Dragon Scale Mail
+
+  PassDecorItem
+    id: decorMms
+    anchors.right: plusPanel.left
+    anchors.top: parent.top
+    margin-right: 50
+    margin-top: 1
+    image-source: /images/passhub/mastermind_shield
+    tooltip: Mastermind Shield
+
+  PassDecorItem
+    id: decorStonecutter
+    anchors.right: plusPanel.left
+    anchors.bottom: parent.bottom
+    margin-right: 50
+    margin-bottom: 1
+    image-source: /images/passhub/stonecutter
+    tooltip: Stonecutter Axe
+
+  PassDecorItem
+    id: decorThunder
+    anchors.right: plusPanel.left
+    anchors.top: parent.top
+    margin-right: 26
+    margin-top: 1
+    image-source: /images/passhub/thunder_hammer
+    tooltip: Thunder Hammer
+
+  PassDecorItem
+    id: decorDemonArmor
+    anchors.right: plusPanel.left
+    anchors.bottom: parent.bottom
+    margin-right: 26
+    margin-bottom: 1
+    image-source: /images/passhub/demon_armor
+    tooltip: Demon Armor
+
+  PassDecorItem
+    id: decorGoldenLegs
+    anchors.right: plusPanel.left
+    anchors.verticalCenter: parent.verticalCenter
+    margin-right: 4
+    image-source: /images/passhub/golden_legs
+    tooltip: Golden Legs
+
+  Panel
+    id: plusPanel
+    anchors.right: parent.right
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    width: 140
+    focusable: false
+
+    Button
+      id: buyPassBtn
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      size: 100 28
+      font: verdana-11px-rounded
+      text: BUY PASS+
+      color: #1a1a1a
+      background-color: #f0c040
+
+    Label
+      id: daysLabel
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      text-align: right
+      font: verdana-11px-rounded
+      color: #f0c040
+      text-auto-resize: true
+      text: 0 day(s) left
+      visible: false

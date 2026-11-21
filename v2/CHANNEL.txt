@@ -1,6 +1,7 @@
 ZDECHLAK OTC updates/v2 — Stable tip
 Client: 1.0.94 / sequence 96
-Launcher: 1.0.30 / sequence 24
+Launcher: 1.0.31 / sequence 25
 Primary: https://s1.zdechlak.pl:9443/updates/v2
 Fallback: https://raw.githubusercontent.com/wojewodzki12/zdechlak-client/updates/v2
-Notes: shop catalog+banner fix; Ctrl+S skills; 3-parallel smooth download bar
+Notes: restore in-client update gate; no blocking native window; launcher tip first; skip full SHA on every boot
+IMPORTANT: if stuck on old "Reusing/Downloading" window, kill it and replace BOTH ZDECHLAK.exe and "ZDECHLAK Launcher.exe" with 1.0.31 from GitHub release v1.0.31-launcher

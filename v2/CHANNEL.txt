@@ -1,6 +1,6 @@
 ZDECHLAK OTC updates/v2 — Stable tip
-Client: 1.0.95 / sequence 97
-Launcher: 1.0.31 / sequence 25
+Client: 1.0.96 / sequence 98
+Launcher: 1.0.32 / sequence 26
 Primary: https://s1.zdechlak.pl:9443/updates/v2
 Fallback: https://raw.githubusercontent.com/wojewodzki12/zdechlak-client/updates/v2
-Notes: Pass category icons (dragon/bag/chest/orb/staff); shop banerixx; minimap save fix
+Notes: Others qty once; 4-wide byte-smooth download bar; throttled reuse progress

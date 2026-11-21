@@ -1,6 +1,6 @@
 ZDECHLAK OTC updates/v2 — Stable tip
-Client: 1.0.93 / sequence 95
-Launcher: 1.0.29 / sequence 23
+Client: 1.0.94 / sequence 96
+Launcher: 1.0.30 / sequence 24
 Primary: https://s1.zdechlak.pl:9443/updates/v2
 Fallback: https://raw.githubusercontent.com/wojewodzki12/zdechlak-client/updates/v2
-Notes: fix Update-launcher-required after sync (GATE=1 + IPC accept); apply launcher before OTC
+Notes: shop catalog+banner fix; Ctrl+S skills; 3-parallel smooth download bar
